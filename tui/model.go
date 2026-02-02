@@ -95,9 +95,7 @@ func (i fileItem) FilterValue() string {
 	return i.name
 }
 
-type fileDelegate struct {
-	getWidth func() int
-}
+type fileDelegate struct{}
 
 func (d fileDelegate) Height() int                             { return 1 }
 func (d fileDelegate) Spacing() int                            { return 0 }
@@ -108,13 +106,11 @@ func (d fileDelegate) Render(w io.Writer, m list.Model, index int, item list.Ite
 	if !ok {
 		return
 	}
-	width := 30
-	if d.getWidth != nil {
-		if w := d.getWidth(); w > 0 {
-			width = w
-		}
+	width := m.Width()
+	if width <= 0 {
+		width = 30
 	}
-	line := formatCell(file.name, width)
+	line := formatCellTail(file.name, width)
 	if index == m.Index() {
 		line = lipgloss.NewStyle().Reverse(true).Render(line)
 	}
@@ -196,7 +192,6 @@ func NewModel(prs []PRInfo, opts Options) Model {
 	fileList.SetShowFilter(false)
 	fileList.SetShowPagination(false)
 	fileList.SetFilteringEnabled(false)
-	fileDelegate.getWidth = func() int { return m.diffFileWidth }
 	m.diffFiles = fileList
 
 	delegate.getColumns = func() columnWidths { return m.columns }
@@ -461,6 +456,33 @@ func formatCell(value string, width int) string {
 	}
 	truncated := runewidth.Truncate(value, width, "")
 	return runewidth.FillRight(truncated, width)
+}
+
+func formatCellTail(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(value) <= width {
+		return runewidth.FillRight(value, width)
+	}
+	if width == 1 {
+		return "…"
+	}
+	parts := strings.Split(value, "/")
+	if len(parts) > 1 {
+		suffix := parts[len(parts)-1]
+		for i := len(parts) - 2; i >= 0; i-- {
+			candidate := parts[i] + "/" + suffix
+			if runewidth.StringWidth(candidate)+2 > width {
+				break
+			}
+			suffix = candidate
+		}
+		result := "…/" + suffix
+		return runewidth.FillRight(runewidth.Truncate(result, width, ""), width)
+	}
+	trimmed := runewidth.TruncateLeft(value, width-1, "")
+	return runewidth.FillRight("…"+trimmed, width)
 }
 
 func (m *Model) columnHeader() string {
