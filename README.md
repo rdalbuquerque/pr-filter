@@ -270,4 +270,5 @@ Config is stored at `~/.config/pr-filter/config.json` and is created on first ru
 - `l` logs
 - `enter` view PR details
 - `x` toggle checked
-- `v` toggle view (active/checked)
+- `m` toggle saved
+- `v` toggle view (active/saved/checked)

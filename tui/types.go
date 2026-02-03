@@ -15,6 +15,7 @@ type PRInfo struct {
 	FailReasons   []string `json:"fail_reasons"`
 	Taken         bool     `json:"taken"`
 	Checked       bool     `json:"checked"`
+	Saved         bool     `json:"saved"`
 }
 
 type FilterState struct {

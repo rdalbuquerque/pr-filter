@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,13 @@ func fetchDiffCmd(prURL, token string) tea.Cmd {
 	return func() tea.Msg {
 		content, err := fetchDiff(prURL, token)
 		if err != nil {
+			if tooLarge := isDiffTooLarge(err); tooLarge {
+				files, fileErr := fetchDiffFiles(prURL, token)
+				if fileErr != nil {
+					return diffMsg{err: err}
+				}
+				return diffMsg{files: files}
+			}
 			return diffMsg{err: err}
 		}
 		highlighted, err := renderDiff(content)
@@ -63,6 +71,66 @@ func fetchDiff(prURL, token string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func isDiffTooLarge(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "diff exceeded the maximum number of files") || strings.Contains(err.Error(), "too_large")
+}
+
+func fetchDiffFiles(prURL, token string) ([]string, error) {
+	owner, repo, number, err := parsePRURL(prURL)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	files := make([]string, 0)
+	page := 1
+	for {
+		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%d/files?per_page=100&page=%d", owner, repo, number, page)
+		request, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Accept", "application/vnd.github.v3+json")
+		request.Header.Set("User-Agent", "pr-filter-tui")
+		if token != "" {
+			request.Header.Set("Authorization", "Bearer "+token)
+		}
+
+		resp, err := client.Do(request)
+		if err != nil {
+			return nil, err
+		}
+		var payload []struct {
+			Filename string `json:"filename"`
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("list files failed: %s %s", resp.Status, string(body))
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+
+		if len(payload) == 0 {
+			break
+		}
+		for _, item := range payload {
+			if item.Filename != "" {
+				files = append(files, item.Filename)
+			}
+		}
+		page++
+	}
+
+	return files, nil
 }
 
 func renderDiff(content string) (string, error) {

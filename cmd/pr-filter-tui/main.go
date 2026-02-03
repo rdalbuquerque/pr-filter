@@ -256,6 +256,7 @@ func fetchAndCache(cfg config, logs []string) ([]tui.PRInfo, []string, error) {
 	for _, pr := range prs {
 		if cached, ok := cacheEntries[pr.URL]; ok {
 			pr.Checked = cached.Checked
+			pr.Saved = cached.Saved
 		}
 		merged = append(merged, pr)
 	}

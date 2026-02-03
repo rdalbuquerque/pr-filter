@@ -227,6 +227,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.openDetail()
 		case "x":
 			m.toggleChecked()
+		case "m":
+			m.toggleSaved()
 		case "l":
 			m.logMode = true
 		case "f":
@@ -305,10 +307,13 @@ func (m *Model) rebuild() {
 		if pr.Taken {
 			continue
 		}
-		if m.viewMode == "active" && pr.Checked {
+		if m.viewMode == "active" && (pr.Checked || pr.Saved) {
 			continue
 		}
 		if m.viewMode == "checked" && !pr.Checked {
+			continue
+		}
+		if m.viewMode == "saved" && !pr.Saved {
 			continue
 		}
 		if !m.filters.Matches(pr) {
@@ -359,7 +364,8 @@ func (m *Model) updateLayout() {
 	}
 	m.list.SetHeight(listHeight)
 
-	diffHeight := m.height - 4
+	detailChrome := 7
+	diffHeight := m.height - detailChrome
 	if diffHeight < 3 {
 		diffHeight = 3
 	}
@@ -440,6 +446,8 @@ func (m *Model) formatRow(pr PRInfo) string {
 	mark := ""
 	if pr.Checked {
 		mark = "x"
+	} else if pr.Saved {
+		mark = "S"
 	}
 	repo := formatCell(pr.Repository, cols.repo)
 	stars := formatCell(strconv.Itoa(pr.Stars), cols.stars)
@@ -780,6 +788,32 @@ func (m *Model) toggleChecked() {
 	for i, pr := range m.allRows {
 		if pr.URL == prItem.pr.URL {
 			pr.Checked = !pr.Checked
+			if pr.Checked {
+				pr.Saved = false
+			}
+			m.allRows[i] = pr
+			if m.savePR != nil {
+				m.savePR(pr)
+			}
+			break
+		}
+	}
+	m.rebuild()
+}
+
+func (m *Model) toggleSaved() {
+	item := m.list.SelectedItem()
+	prItem, ok := item.(prItem)
+	if !ok || prItem.pr.URL == "" {
+		return
+	}
+
+	for i, pr := range m.allRows {
+		if pr.URL == prItem.pr.URL {
+			pr.Saved = !pr.Saved
+			if pr.Saved {
+				pr.Checked = false
+			}
 			m.allRows[i] = pr
 			if m.savePR != nil {
 				m.savePR(pr)
@@ -791,10 +825,13 @@ func (m *Model) toggleChecked() {
 }
 
 func (m *Model) toggleViewMode() {
-	if m.viewMode == "checked" {
-		m.viewMode = "active"
-	} else {
+	switch m.viewMode {
+	case "active":
+		m.viewMode = "saved"
+	case "saved":
 		m.viewMode = "checked"
+	default:
+		m.viewMode = "active"
 	}
 	m.rebuild()
 }
@@ -882,6 +919,7 @@ func (m Model) padView(view string) string {
 type diffMsg struct {
 	raw     string
 	content string
+	files   []string
 	err     error
 }
 
@@ -993,12 +1031,18 @@ func (m *Model) handleDiffMsg(msg diffMsg) {
 		m.diffError = msg.err.Error()
 		m.diffContent = fmt.Sprintf("Diff error: %s", m.diffError)
 		m.logs = append(m.logs, fmt.Sprintf("Diff error: %v", msg.err))
-		m.diffSections = nil
-		m.refreshDiffFiles()
 	} else {
 		m.diffError = ""
 		m.diffContent = msg.content
 		m.diffSections = parseDiffSections(msg.raw)
+		m.refreshDiffFiles()
+	}
+	if len(msg.files) > 0 {
+		m.diffSections = make([]diffSection, 0, len(msg.files))
+		for _, name := range msg.files {
+			m.diffSections = append(m.diffSections, diffSection{file: name})
+		}
+		m.diffContent = "Diff too large to display. Use file list to navigate or open locally."
 		m.refreshDiffFiles()
 	}
 	if m.detailMode && m.detailTab == "diff" {
@@ -1084,9 +1128,8 @@ func (m Model) viewDetail() string {
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, content)
 	}
 
-	focus := fmt.Sprintf("Focus: %s", m.detailFocus)
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Keys: tab switch | H/L focus | esc back | q quit | j/k scroll")
-	return m.padView(strings.Join([]string{header, prLine, issueLine, tabs, status, focus, content, help}, "\n"))
+	return m.padView(strings.Join([]string{header, prLine, issueLine, tabs, status, content, help}, "\n"))
 }
 
 func (m *Model) refreshDiffFiles() {
@@ -1128,6 +1171,11 @@ func (m *Model) updateDiffSelection() {
 			section.render = rendered
 		}
 		m.diffSections[index] = section
+	}
+	if section.raw == "" && section.render == "" {
+		m.viewport.SetContent(m.diffContent)
+		m.viewport.GotoTop()
+		return
 	}
 	if section.render != "" {
 		m.viewport.SetContent(section.render)
