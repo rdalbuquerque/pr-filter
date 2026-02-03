@@ -316,8 +316,10 @@ func (m *Model) rebuild() {
 		if m.viewMode == "saved" && !pr.Saved {
 			continue
 		}
-		if !m.filters.Matches(pr) {
-			continue
+		if m.viewMode == "active" {
+			if !m.filters.Matches(pr) {
+				continue
+			}
 		}
 		filtered = append(filtered, pr)
 	}

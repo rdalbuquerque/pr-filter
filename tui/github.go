@@ -123,12 +123,12 @@ func fetchPR(ctx context.Context, client *github.Client, prURL string) (PRInfo, 
 		return PRInfo{}, fmt.Errorf("fetch repository: %w", err)
 	}
 
-	files, _, err := client.PullRequests.ListFiles(ctx, owner, repo, number, nil)
+	files, err := fetchAllPRFiles(ctx, client, owner, repo, number)
 	if err != nil {
 		return PRInfo{}, fmt.Errorf("fetch files: %w", err)
 	}
 
-	filesChanged := len(files)
+	filesChanged := pr.GetChangedFiles()
 	linesChanged := pr.GetAdditions() + pr.GetDeletions()
 	hasTestFiles := checkForTestFiles(files)
 
@@ -213,6 +213,24 @@ func checkForTestFiles(files []*github.CommitFile) bool {
 		}
 	}
 	return false
+}
+
+func fetchAllPRFiles(ctx context.Context, client *github.Client, owner, repo string, number int) ([]*github.CommitFile, error) {
+	files := make([]*github.CommitFile, 0)
+	page := 1
+	for {
+		opts := &github.ListOptions{PerPage: 100, Page: page}
+		batch, resp, err := client.PullRequests.ListFiles(ctx, owner, repo, number, opts)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, batch...)
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		page = resp.NextPage
+	}
+	return files, nil
 }
 
 func extractIssues(body, owner, repo string) []string {
