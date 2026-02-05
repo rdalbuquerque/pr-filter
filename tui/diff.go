@@ -10,10 +10,12 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/mattn/go-runewidth"
 )
 
 func fetchDiffCmd(prURL, token string) tea.Cmd {
@@ -138,9 +140,10 @@ func renderDiff(content string) (string, error) {
 }
 
 type diffSection struct {
-	file   string
-	raw    string
-	render string
+	file       string
+	raw        string
+	render     string
+	renderSide string
 }
 
 func parseDiffSections(content string) []diffSection {
@@ -178,6 +181,134 @@ func extractDiffFile(line string) string {
 	path := parts[3]
 	path = strings.TrimPrefix(path, "b/")
 	return path
+}
+
+type sideBySideLine struct {
+	left      string
+	right     string
+	leftType  string
+	rightType string
+}
+
+func renderSideBySideDiff(raw string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	sep := " │ "
+	leftWidth := (width - len(sep)) / 2
+	rightWidth := width - len(sep) - leftWidth
+	lines := buildSideBySideLines(raw)
+	if len(lines) == 0 {
+		return raw
+	}
+
+	var out bytes.Buffer
+	for i, line := range lines {
+		left := formatSideCell(line.left, leftWidth)
+		right := formatSideCell(line.right, rightWidth)
+		left = styleSideCell(left, line.leftType)
+		right = styleSideCell(right, line.rightType)
+		out.WriteString(left)
+		out.WriteString(sep)
+		out.WriteString(right)
+		if i < len(lines)-1 {
+			out.WriteString("\n")
+		}
+	}
+	return out.String()
+}
+
+func buildSideBySideLines(raw string) []sideBySideLine {
+	lines := strings.Split(raw, "\n")
+	output := make([]sideBySideLine, 0, len(lines))
+	var dels []string
+	var adds []string
+	flush := func() {
+		max := len(dels)
+		if len(adds) > max {
+			max = len(adds)
+		}
+		for i := 0; i < max; i++ {
+			left := ""
+			right := ""
+			if i < len(dels) {
+				left = dels[i]
+			}
+			if i < len(adds) {
+				right = adds[i]
+			}
+			output = append(output, sideBySideLine{left: left, right: right, leftType: lineType(left), rightType: lineType(right)})
+		}
+		dels = nil
+		adds = nil
+	}
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+			flush()
+			output = append(output, sideBySideLine{left: line, right: "", leftType: "header"})
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			flush()
+			output = append(output, sideBySideLine{left: line, right: line, leftType: "hunk", rightType: "hunk"})
+			continue
+		}
+		if strings.HasPrefix(line, "-") {
+			dels = append(dels, line)
+			continue
+		}
+		if strings.HasPrefix(line, "+") {
+			adds = append(adds, line)
+			continue
+		}
+		if strings.HasPrefix(line, " ") || line == "" {
+			flush()
+			output = append(output, sideBySideLine{left: line, right: line, leftType: lineType(line), rightType: lineType(line)})
+			continue
+		}
+	}
+	flush()
+	return output
+}
+
+func lineType(line string) string {
+	if line == "" {
+		return "context"
+	}
+	switch line[0] {
+	case '+':
+		return "add"
+	case '-':
+		return "del"
+	case '@':
+		return "hunk"
+	default:
+		return "context"
+	}
+}
+
+func formatSideCell(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	trimmed := runewidth.Truncate(value, width, "")
+	return runewidth.FillRight(trimmed, width)
+}
+
+func styleSideCell(value string, kind string) string {
+	switch kind {
+	case "add":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("70")).Render(value)
+	case "del":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("160")).Render(value)
+	case "hunk":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Render(value)
+	case "header":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(value)
+	default:
+		return value
+	}
 }
 
 func renderDiffSection(section diffSection) (string, error) {

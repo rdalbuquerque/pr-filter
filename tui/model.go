@@ -66,6 +66,7 @@ type Model struct {
 	saveFilters        func(FilterState)
 	savePR             func(PRInfo)
 	viewMode           string
+	diffLayout         string
 	diffIndex          int
 	diffFileWidth      int
 	diffViewportWidth  int
@@ -179,6 +180,7 @@ func NewModel(prs []PRInfo, opts Options) Model {
 		saveFilters: opts.SaveFilters,
 		savePR:      opts.SavePR,
 		viewMode:    "active",
+		diffLayout:  "side",
 		debugLog:    opts.DebugLog,
 	}
 	m.viewport.FillHeight = true
@@ -404,7 +406,11 @@ func (m *Model) updateLayout() {
 	}
 	m.diffViewportWidth = viewportWidth
 	m.diffViewportHeight = diffHeight
-	m.viewport.SetWidth(viewportWidth)
+	if m.detailMode && m.detailTab == "diff" && m.diffLayout == "inline" {
+		m.viewport.SetWidth(m.width - 2)
+	} else {
+		m.viewport.SetWidth(viewportWidth)
+	}
 	m.viewport.SetHeight(diffHeight)
 	m.viewport.SoftWrap = false
 	m.debugf("layout filePaneWidth=%d fileWidth=%d viewportWidth=%d diffHeight=%d", filePaneWidth, m.diffFileWidth, m.diffViewportWidth, m.diffViewportHeight)
@@ -838,6 +844,21 @@ func (m *Model) toggleViewMode() {
 	m.rebuild()
 }
 
+func (m *Model) toggleDiffLayout() {
+	if m.detailTab != "diff" {
+		return
+	}
+	if m.diffLayout == "inline" {
+		m.diffLayout = "side"
+		m.diffIndex = -1
+		m.updateDiffSelection()
+		return
+	}
+	m.diffLayout = "inline"
+	m.diffIndex = -1
+	m.updateDiffSelection()
+}
+
 func (m *Model) debugf(format string, args ...any) {
 	if m.debugLog == nil {
 		return
@@ -936,6 +957,7 @@ func (m *Model) openDetail() tea.Cmd {
 	m.detailTab = "diff"
 	m.detailFocus = "files"
 	m.detailPR = pr.pr
+	m.diffLayout = "side"
 	m.diffLoading = true
 	m.diffError = ""
 	m.diffTitle = fmt.Sprintf("Details: %s", pr.pr.Repository)
@@ -967,6 +989,8 @@ func (m Model) updateDetailMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "tab":
 			return m.switchDetailTab()
+		case "t":
+			m.toggleDiffLayout()
 		case "H":
 			if m.detailTab == "diff" {
 				m.detailFocus = "files"
@@ -1130,7 +1154,7 @@ func (m Model) viewDetail() string {
 		content = lipgloss.JoinHorizontal(lipgloss.Top, left, content)
 	}
 
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Keys: tab switch | H/L focus | esc back | q quit | j/k scroll")
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Keys: tab switch | t layout | H/L focus | esc back | q quit | j/k scroll")
 	return m.padView(strings.Join([]string{header, prLine, issueLine, tabs, status, content, help}, "\n"))
 }
 
@@ -1164,6 +1188,17 @@ func (m *Model) updateDiffSelection() {
 	}
 	m.diffIndex = index
 	section := m.diffSections[index]
+	if m.diffLayout == "side" {
+		if section.renderSide == "" && section.raw != "" {
+			section.renderSide = renderSideBySideDiff(section.raw, m.diffViewportWidth)
+			m.diffSections[index] = section
+		}
+		if section.renderSide != "" {
+			m.viewport.SetContent(section.renderSide)
+			m.viewport.GotoTop()
+		}
+		return
+	}
 	if section.render == "" && section.raw != "" {
 		rendered, err := renderDiffSection(section)
 		if err != nil {
