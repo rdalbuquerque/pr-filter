@@ -28,10 +28,38 @@ go build -o pr-filter
 
 ## Usage
 
-Set your GitHub token (required for API access):
+### Authentication
+
+The application supports two methods of GitHub authentication:
+
+**Option 1: Device Flow (Recommended)**
+
+Device flow allows authentication without storing personal access tokens. To use it:
+
+1. Create a GitHub OAuth App at https://github.com/settings/developers
+   - Set the app name to "pr-filter" (or any name you prefer)
+   - No callback URL needed for device flow
+   - Note the Client ID
+
+2. Set the Client ID as an environment variable:
+```bash
+export GITHUB_CLIENT_ID=your_oauth_app_client_id
+```
+
+3. Run the app - it will guide you through authentication on first use
+
+**Option 2: Personal Access Token**
+Set your GitHub token as an environment variable:
 
 ```bash
 export GITHUB_TOKEN=your_github_token_here
+```
+
+To clear saved credentials and re-authenticate:
+```bash
+./pr-filter -clear-token
+# or for TUI:
+./pr-filter-tui -clear-github-token
 ```
 
 ### Basic Usage
@@ -240,19 +268,27 @@ go build -o bin/pr-filter-tui ./cmd/pr-filter-tui
 
 ```bash
 # Fetch from Google Sheets if cache is empty (defaults from config)
+# Option 1: Use device flow (set GITHUB_CLIENT_ID first)
+export GITHUB_CLIENT_ID=your_oauth_app_client_id
+./bin/pr-filter-tui
+
+# Option 2: Use personal access token
 export GITHUB_TOKEN=your_token_here
 ./bin/pr-filter-tui
 
 # Optional overrides
-./bin/pr-filter-tui -refresh
-./bin/pr-filter-tui -cache /tmp/prs.db
+./bin/pr-filter-tui -refresh              # Force refresh from Google Sheets
+./bin/pr-filter-tui -force-auth           # Force re-authentication with GitHub
+./bin/pr-filter-tui -clear-cache          # Clear cached PRs
+./bin/pr-filter-tui -clear-github-token   # Clear saved GitHub token
+./bin/pr-filter-tui -cache /tmp/prs.db    # Use custom cache location
 ```
 
 The sheet must include columns named `taken` and `pr_link`. Only rows where `taken` is empty/false are fetched.
 
 Config is stored at `~/.config/pr-filter/config.json` and is created on first run with defaults:
 - `sheet_id`: `1WnGf8ULFHVpTjnpLz46DH-UrvOCLtkDmqilZLzaS4KM`
-- `sheet_gid`: `886975217`
+- `sheet_gid`: `1547645354`
 - `cache_path`: `~/.config/pr-filter/cache.db`
 - `google_secret`: `client_secret_1047690774768-7u0fn9fkn61g2nhu1kcrsj0otdoobjtg.apps.googleusercontent.com.json`
 

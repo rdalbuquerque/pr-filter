@@ -1,15 +1,13 @@
-.PHONY: build build-tui run run-tui clean test help
+.PHONY: build-fetcher build-tui docker-up docker-down setup-google-auth clean test deps help
 
-# Binary name
-BINARY=pr-filter
 OUTPUT_DIR=bin
 
-# Build the application
-build:
-	@echo "Building $(BINARY)..."
+# Build the data-gathering service
+build-fetcher:
+	@echo "Building pr-fetcher..."
 	@mkdir -p $(OUTPUT_DIR)
-	go build -o $(OUTPUT_DIR)/$(BINARY) .
-	@echo "Build complete: $(OUTPUT_DIR)/$(BINARY)"
+	go build -o $(OUTPUT_DIR)/pr-fetcher ./cmd/pr-fetcher
+	@echo "Build complete: $(OUTPUT_DIR)/pr-fetcher"
 
 # Build the TUI application
 build-tui:
@@ -18,34 +16,34 @@ build-tui:
 	go build -o $(OUTPUT_DIR)/pr-filter-tui ./cmd/pr-filter-tui
 	@echo "Build complete: $(OUTPUT_DIR)/pr-filter-tui"
 
-# Run with sample PRs (table output)
-run: build
-	@if [ -z "$$GITHUB_TOKEN" ]; then \
-		echo "Error: GITHUB_TOKEN environment variable not set"; \
-		exit 1; \
-	fi
-	$(OUTPUT_DIR)/$(BINARY) -input sample_prs.txt
+# Build both
+build: build-fetcher build-tui
 
-# Run with sample PRs (JSON output)
-run-json: build
-	@if [ -z "$$GITHUB_TOKEN" ]; then \
-		echo "Error: GITHUB_TOKEN environment variable not set"; \
-		exit 1; \
-	fi
-	$(OUTPUT_DIR)/$(BINARY) -input sample_prs.txt -output json
+# Run the fetcher locally (no Docker)
+run-fetcher: build-fetcher
+	$(OUTPUT_DIR)/pr-fetcher
 
-# Run with custom input
-run-custom: build
-	@echo "Running $(BINARY) (paste PR URLs, Ctrl+D to finish)..."
-	@if [ -z "$$GITHUB_TOKEN" ]; then \
-		echo "Error: GITHUB_TOKEN environment variable not set"; \
-		exit 1; \
-	fi
-	$(OUTPUT_DIR)/$(BINARY)
-
-# Run the TUI (expects -cache or -data)
+# Run the TUI against data file
 run-tui: build-tui
-	$(OUTPUT_DIR)/pr-filter-tui
+	$(OUTPUT_DIR)/pr-filter-tui --data data/prs.json
+
+# Docker targets
+docker-up:
+	docker compose up -d --build
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f
+
+# One-time Google OAuth setup
+setup-google-auth:
+	SHEET_ID=$${SHEET_ID} \
+	GOOGLE_SECRET=$${GOOGLE_SECRET:-config/client_secret.json} \
+	GOOGLE_TOKEN=$${GOOGLE_TOKEN:-config/google-token.json} \
+	GITHUB_TOKEN=$${GITHUB_TOKEN:-placeholder} \
+	go run ./cmd/pr-fetcher --setup
 
 # Download dependencies
 deps:
@@ -64,25 +62,25 @@ test:
 	@echo "Running tests..."
 	go test -v ./...
 
-# Install the binary to $GOPATH/bin
-install:
-	@echo "Installing $(BINARY)..."
-	go install .
-
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  build       - Build the application"
-	@echo "  build-tui   - Build the TUI application"
-	@echo "  run         - Run with sample_prs.txt (table output)"
-	@echo "  run-tui     - Run the TUI (requires -cache or -data)"
-	@echo "  run-json    - Run with sample_prs.txt (JSON output)"
-	@echo "  run-custom  - Run with custom input (stdin)"
-	@echo "  deps        - Download dependencies"
-	@echo "  clean       - Remove build artifacts"
-	@echo "  test        - Run tests"
-	@echo "  install     - Install to GOPATH/bin"
-	@echo "  help        - Show this help"
+	@echo "  build-fetcher      - Build the data-gathering service"
+	@echo "  build-tui          - Build the TUI application"
+	@echo "  build              - Build both binaries"
+	@echo "  run-fetcher        - Run fetcher locally"
+	@echo "  run-tui            - Run TUI against data/prs.json"
+	@echo "  docker-up          - Start fetcher in Docker"
+	@echo "  docker-down        - Stop Docker container"
+	@echo "  docker-logs        - Follow Docker logs"
+	@echo "  setup-google-auth  - One-time Google OAuth setup"
+	@echo "  deps               - Download dependencies"
+	@echo "  clean              - Remove build artifacts"
+	@echo "  test               - Run tests"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  GITHUB_TOKEN - Required for GitHub API access"
+	@echo "  GITHUB_TOKEN  - Required for GitHub API access"
+	@echo "  SHEET_ID      - Google Sheet ID"
+	@echo "  SHEET_GID     - Sheet tab GID"
+	@echo "  GOOGLE_SECRET - Path to Google OAuth client secret"
+	@echo "  GOOGLE_TOKEN  - Path to Google OAuth token cache"

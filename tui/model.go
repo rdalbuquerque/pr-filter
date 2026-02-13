@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"sort"
@@ -13,7 +14,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
+	ghpkg "github.com/revelo/pr-filter/internal/github"
+	"github.com/revelo/pr-filter/internal/prdata"
 )
+
+// PRInfoView wraps prdata.PRInfo with TUI-local state.
+type PRInfoView struct {
+	prdata.PRInfo
+	Checked bool
+	Saved   bool
+}
 
 type Options struct {
 	PageSize    int
@@ -21,9 +31,9 @@ type Options struct {
 	SortDesc    bool
 	Logs        []string
 	GitHubToken string
-	Filters     FilterState
-	SaveFilters func(FilterState)
-	SavePR      func(PRInfo)
+	Filters     prdata.FilterState
+	SaveFilters func(prdata.FilterState)
+	SavePR      func(PRInfoView)
 	DebugLog    func(string)
 }
 
@@ -36,9 +46,9 @@ type columnWidths struct {
 }
 
 type Model struct {
-	allRows            []PRInfo
-	filters            FilterState
-	filtered           []PRInfo
+	allRows            []PRInfoView
+	filters            prdata.FilterState
+	filtered           []PRInfoView
 	list               list.Model
 	sortBy             string
 	sortDesc           bool
@@ -53,7 +63,7 @@ type Model struct {
 	detailMode         bool
 	detailTab          string
 	detailFocus        string
-	detailPR           PRInfo
+	detailPR           PRInfoView
 	diffLoading        bool
 	issueLoading       bool
 	diffTitle          string
@@ -63,8 +73,8 @@ type Model struct {
 	issueContent       string
 	diffSections       []diffSection
 	diffFiles          list.Model
-	saveFilters        func(FilterState)
-	savePR             func(PRInfo)
+	saveFilters        func(prdata.FilterState)
+	savePR             func(PRInfoView)
 	viewMode           string
 	diffLayout         string
 	diffIndex          int
@@ -79,7 +89,7 @@ type Model struct {
 }
 
 type prItem struct {
-	pr      PRInfo
+	pr      PRInfoView
 	display string
 	filter  string
 }
@@ -146,7 +156,7 @@ const (
 	inputMaxLines
 )
 
-func NewModel(prs []PRInfo, opts Options) Model {
+func NewModel(prs []PRInfoView, opts Options) Model {
 	if opts.PageSize <= 0 {
 		opts.PageSize = 20
 	}
@@ -164,8 +174,8 @@ func NewModel(prs []PRInfo, opts Options) Model {
 	l.SetFilteringEnabled(true)
 
 	filters := opts.Filters
-	if filters == (FilterState{}) {
-		filters = DefaultFilters()
+	if filters == (prdata.FilterState{}) {
+		filters = prdata.DefaultFilters()
 	}
 
 	m := Model{
@@ -201,6 +211,12 @@ func NewModel(prs []PRInfo, opts Options) Model {
 
 	m.initInputs()
 	m.rebuild()
+	if len(m.filtered) == 0 && len(m.allRows) > 0 && m.hasActiveFilters() {
+		m.logs = append(m.logs, "No items matched current filters; showing all items instead")
+		m.filters = prdata.FilterState{}
+		m.syncInputs()
+		m.rebuild()
+	}
 	return m
 }
 
@@ -236,12 +252,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			m.enterFilterMode()
 		case "r":
-			m.filters = DefaultFilters()
+			m.filters = prdata.DefaultFilters()
 			m.syncInputs()
 			m.rebuild()
 			m.persistFilters()
 		case "c":
-			m.filters = FilterState{}
+			m.filters = prdata.FilterState{}
 			m.syncInputs()
 			m.rebuild()
 			m.persistFilters()
@@ -267,10 +283,48 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleDiffMsg(msg)
 	case issueMsg:
 		m.handleIssueMsg(msg)
+	case dataFileChangedMsg:
+		m.handleDataFileChanged(msg)
 	}
 
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// dataFileChangedMsg is sent when the data file is updated by the fetcher.
+type dataFileChangedMsg struct {
+	PRs   []prdata.PRInfo
+	Stats prdata.DataStats
+}
+
+func (m *Model) handleDataFileChanged(msg dataFileChangedMsg) {
+	// Remember selected URL to restore cursor position
+	var selectedURL string
+	if item := m.list.SelectedItem(); item != nil {
+		if pr, ok := item.(prItem); ok {
+			selectedURL = pr.pr.URL
+		}
+	}
+
+	// Build a map of current local state
+	localState := make(map[string]struct{ Checked, Saved bool })
+	for _, pr := range m.allRows {
+		localState[pr.URL] = struct{ Checked, Saved bool }{pr.Checked, pr.Saved}
+	}
+
+	// Merge new data with local state
+	newRows := make([]PRInfoView, 0, len(msg.PRs))
+	for _, pr := range msg.PRs {
+		view := PRInfoView{PRInfo: pr}
+		if state, ok := localState[pr.URL]; ok {
+			view.Checked = state.Checked
+			view.Saved = state.Saved
+		}
+		newRows = append(newRows, view)
+	}
+
+	m.allRows = newRows
+	m.rebuildKeepSelection(selectedURL)
 }
 
 func (m Model) View() tea.View {
@@ -284,12 +338,12 @@ func (m Model) View() tea.View {
 		return tea.NewView(m.viewDetail())
 	}
 
-	header := lipgloss.NewStyle().Bold(true).Render("PR Filter TUI")
+	header := m.viewTabs()
 	filters := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render(m.filtersSummary())
 	columns := m.columnHeader()
 	selected := m.selectedInfo()
 	status := m.statusLine()
-	keys := "Keys: q quit | f filters | / search | n/p page | g/G first/last | s sort | o order | enter details | l logs"
+	keys := "Keys: q quit | f filters | c clear | / search | v mode | x checked | m saved | n/p page | g/G first/last | s sort | o order | enter details | l logs"
 
 	view := strings.Join([]string{
 		header,
@@ -304,12 +358,15 @@ func (m Model) View() tea.View {
 }
 
 func (m *Model) rebuild() {
-	filtered := make([]PRInfo, 0, len(m.allRows))
+	filtered := make([]PRInfoView, 0, len(m.allRows))
 	for _, pr := range m.allRows {
 		if pr.Taken {
 			continue
 		}
-		if m.viewMode == "active" && (pr.Checked || pr.Saved) {
+		if m.viewMode == "active" && pr.Hydration < 1 {
+			continue
+		}
+		if m.viewMode == "active" && pr.Checked {
 			continue
 		}
 		if m.viewMode == "checked" && !pr.Checked {
@@ -319,16 +376,30 @@ func (m *Model) rebuild() {
 			continue
 		}
 		if m.viewMode == "active" {
-			if !m.filters.Matches(pr) {
+			if !m.filters.Matches(pr.PRInfo) {
 				continue
 			}
 		}
 		filtered = append(filtered, pr)
 	}
 
-	sortPRs(filtered, m.sortBy, m.sortDesc)
+	sortPRViews(filtered, m.sortBy, m.sortDesc)
 	m.filtered = filtered
 	m.refreshItems()
+}
+
+func (m *Model) rebuildKeepSelection(selectedURL string) {
+	m.rebuild()
+
+	if selectedURL == "" {
+		return
+	}
+	for i, item := range m.list.Items() {
+		if pr, ok := item.(prItem); ok && pr.pr.URL == selectedURL {
+			m.list.Select(i)
+			return
+		}
+	}
 }
 
 func (m *Model) refreshItems() {
@@ -361,7 +432,9 @@ func (m *Model) updateLayout() {
 	m.columns = computeColumns(m.width)
 	m.list.SetWidth(m.width)
 
-	chrome := 6
+	// header(tabs) + filters + columns + selected + status + keys = 6 lines
+	// list also renders pagination (+1) and filter bar when active (+1)
+	chrome := 8
 	listHeight := m.height - chrome
 	if listHeight < 3 {
 		listHeight = 3
@@ -445,7 +518,7 @@ func computeColumns(width int) columnWidths {
 	}
 }
 
-func (m *Model) formatRow(pr PRInfo) string {
+func (m *Model) formatRow(pr PRInfoView) string {
 	issue := pr.ResolvedIssue
 	if issue == "" {
 		issue = "-"
@@ -458,12 +531,19 @@ func (m *Model) formatRow(pr PRInfo) string {
 		mark = "S"
 	}
 	repo := formatCell(pr.Repository, cols.repo)
-	stars := formatCell(strconv.Itoa(pr.Stars), cols.stars)
-	files := formatCell(strconv.Itoa(pr.FilesChanged), cols.files)
-	lines := formatCell(strconv.Itoa(pr.LinesChanged), cols.lines)
+	stars := formatCell(formatMetric(pr.Stars, pr.StarsKnown), cols.stars)
+	files := formatCell(formatMetric(pr.FilesChanged, pr.Hydration >= 1), cols.files)
+	lines := formatCell(formatMetric(pr.LinesChanged, pr.Hydration >= 1), cols.lines)
 	iss := formatCell(issue, cols.issue)
 
 	return fmt.Sprintf("%s %s %s %s %s %s", formatCell(mark, 2), repo, stars, files, lines, iss)
+}
+
+func formatMetric(value int, known bool) string {
+	if !known {
+		return "-"
+	}
+	return strconv.Itoa(value)
 }
 
 func formatCell(value string, width int) string {
@@ -517,6 +597,44 @@ func (m *Model) columnHeader() string {
 	)
 }
 
+func (m Model) viewTabs() string {
+	mode := m.viewMode
+	if mode == "" {
+		mode = "active"
+	}
+
+	tabs := []struct {
+		key   string
+		label string
+	}{
+		{"active", "Active"},
+		{"saved", "Favorites"},
+		{"checked", "Checked"},
+	}
+
+	activeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("15")).
+		Background(lipgloss.Color("62")).
+		Padding(0, 2)
+	inactiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Background(lipgloss.Color("236")).
+		Padding(0, 2)
+
+	var parts []string
+	for _, tab := range tabs {
+		if tab.key == mode {
+			parts = append(parts, activeStyle.Render(tab.label))
+		} else {
+			parts = append(parts, inactiveStyle.Render(tab.label))
+		}
+	}
+
+	title := lipgloss.NewStyle().Bold(true).MarginRight(1).Render("PR Filter")
+	return title + strings.Join(parts, " ")
+}
+
 func (m *Model) selectedInfo() string {
 	item := m.list.SelectedItem()
 	pr, ok := item.(prItem)
@@ -532,11 +650,20 @@ func (m *Model) selectedInfo() string {
 
 func (m *Model) statusLine() string {
 	count := len(m.filtered)
+	total := len(m.allRows)
 	mode := m.viewMode
 	if mode == "" {
 		mode = "active"
 	}
-	return fmt.Sprintf("Items: %d | View: %s | Filter: %s", count, mode, m.list.FilterValue())
+	if count == 0 && total > 0 {
+		return fmt.Sprintf("Items: %d/%d | View: %s | Filter: %s | Tip: press c to clear filters", count, total, mode, m.list.FilterValue())
+	}
+	return fmt.Sprintf("Items: %d/%d | View: %s | Filter: %s", count, total, mode, m.list.FilterValue())
+}
+
+func (m *Model) hasActiveFilters() bool {
+	f := m.filters
+	return f.RepoQuery != "" || f.MinFiles > 0 || f.MinStars > 0 || f.MinLines > 0 || f.MaxLines > 0 || f.RequireTestFiles || f.RequireSingleIssue
 }
 
 func (m *Model) filtersSummary() string {
@@ -590,34 +717,7 @@ func sortLabel(desc bool) string {
 	return "asc"
 }
 
-func (f FilterState) Matches(pr PRInfo) bool {
-	if f.RepoQuery != "" {
-		if !strings.Contains(strings.ToLower(pr.Repository), strings.ToLower(f.RepoQuery)) {
-			return false
-		}
-	}
-	if f.MinFiles > 0 && pr.FilesChanged < f.MinFiles {
-		return false
-	}
-	if f.MinStars > 0 && pr.Stars < f.MinStars {
-		return false
-	}
-	if f.MinLines > 0 && pr.LinesChanged < f.MinLines {
-		return false
-	}
-	if f.MaxLines > 0 && pr.LinesChanged > f.MaxLines {
-		return false
-	}
-	if f.RequireTestFiles && !pr.HasTestFiles {
-		return false
-	}
-	if f.RequireSingleIssue && pr.IssueCount != 1 {
-		return false
-	}
-	return true
-}
-
-func sortPRs(prs []PRInfo, sortBy string, desc bool) {
+func sortPRViews(prs []PRInfoView, sortBy string, desc bool) {
 	sort.Slice(prs, func(i, j int) bool {
 		var less bool
 		switch sortBy {
@@ -699,11 +799,11 @@ func (m Model) updateFilterMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "i":
 			m.filters.RequireSingleIssue = !m.filters.RequireSingleIssue
 		case "r":
-			m.filters = DefaultFilters()
+			m.filters = prdata.DefaultFilters()
 			m.syncInputs()
 			m.persistFilters()
 		case "c":
-			m.filters = FilterState{}
+			m.filters = prdata.FilterState{}
 			m.syncInputs()
 			m.persistFilters()
 		}
@@ -838,6 +938,8 @@ func (m *Model) toggleViewMode() {
 		m.viewMode = "saved"
 	case "saved":
 		m.viewMode = "checked"
+	case "checked":
+		m.viewMode = "active"
 	default:
 		m.viewMode = "active"
 	}
@@ -946,6 +1048,21 @@ type diffMsg struct {
 	err     error
 }
 
+type hydrateMsg struct {
+	pr  prdata.PRInfo
+	err error
+}
+
+func hydratePRCmd(pr prdata.PRInfo, token string) tea.Cmd {
+	return func() tea.Msg {
+		updated, err := ghpkg.HydratePRPass2(context.Background(), pr, token)
+		if err != nil {
+			return hydrateMsg{err: err}
+		}
+		return hydrateMsg{pr: updated}
+	}
+}
+
 func (m *Model) openDetail() tea.Cmd {
 	item := m.list.SelectedItem()
 	pr, ok := item.(prItem)
@@ -957,7 +1074,6 @@ func (m *Model) openDetail() tea.Cmd {
 	m.detailTab = "diff"
 	m.detailFocus = "files"
 	m.detailPR = pr.pr
-	m.diffLayout = "side"
 	m.diffLoading = true
 	m.diffError = ""
 	m.diffTitle = fmt.Sprintf("Details: %s", pr.pr.Repository)
@@ -974,7 +1090,11 @@ func (m *Model) openDetail() tea.Cmd {
 		m.issueContent = "No resolved issue found for this PR."
 	}
 
-	return fetchDiffCmd(pr.pr.URL, m.githubToken)
+	cmds := []tea.Cmd{fetchDiffCmd(pr.pr.URL, m.githubToken)}
+	if pr.pr.Hydration < 2 {
+		cmds = append(cmds, hydratePRCmd(pr.pr.PRInfo, m.githubToken))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) updateDetailMode(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1012,6 +1132,8 @@ func (m Model) updateDetailMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleDiffMsg(msg)
 	case issueMsg:
 		m.handleIssueMsg(msg)
+	case hydrateMsg:
+		m.handleHydrateMsg(msg)
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
 	}
@@ -1094,6 +1216,31 @@ func (m *Model) handleIssueMsg(msg issueMsg) {
 	}
 }
 
+func (m *Model) handleHydrateMsg(msg hydrateMsg) {
+	if msg.err != nil {
+		m.logs = append(m.logs, fmt.Sprintf("Hydration error: %v", msg.err))
+		return
+	}
+	for i, pr := range m.allRows {
+		if pr.URL == msg.pr.URL {
+			view := PRInfoView{
+				PRInfo:  msg.pr,
+				Checked: pr.Checked,
+				Saved:   pr.Saved,
+			}
+			m.allRows[i] = view
+			if m.savePR != nil {
+				m.savePR(view)
+			}
+			break
+		}
+	}
+	if m.detailPR.URL == msg.pr.URL {
+		m.detailPR.PRInfo = msg.pr
+	}
+	m.rebuild()
+}
+
 func (m Model) viewDetail() string {
 	active := lipgloss.NewStyle().Bold(true)
 	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
@@ -1117,6 +1264,19 @@ func (m Model) viewDetail() string {
 	if m.detailPR.Title != "" {
 		prLine = fmt.Sprintf("PR: %s | %s", m.detailPR.URL, m.detailPR.Title)
 	}
+	stars := "-"
+	if m.detailPR.StarsKnown {
+		stars = strconv.Itoa(m.detailPR.Stars)
+	}
+	tests := "-"
+	if m.detailPR.HasTestKnown {
+		if m.detailPR.HasTestFiles {
+			tests = "yes"
+		} else {
+			tests = "no"
+		}
+	}
+	metaLine := fmt.Sprintf("Stars: %s | Files: %d | Lines: %d | Tests changed: %s", stars, m.detailPR.FilesChanged, m.detailPR.LinesChanged, tests)
 	tabs := fmt.Sprintf("[%s] [%s]", diffTab, issueTab)
 	status := ""
 	if m.detailTab == "diff" {
@@ -1155,7 +1315,7 @@ func (m Model) viewDetail() string {
 	}
 
 	help := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Render("Keys: tab switch | t layout | H/L focus | esc back | q quit | j/k scroll")
-	return m.padView(strings.Join([]string{header, prLine, issueLine, tabs, status, content, help}, "\n"))
+	return m.padView(strings.Join([]string{header, prLine, metaLine, issueLine, tabs, status, content, help}, "\n"))
 }
 
 func (m *Model) refreshDiffFiles() {
@@ -1218,4 +1378,10 @@ func (m *Model) updateDiffSelection() {
 		m.viewport.SetContent(section.render)
 		m.viewport.GotoTop()
 	}
+}
+
+// SetAllRows replaces the PR list (used by file watcher).
+func (m *Model) SetAllRows(prs []PRInfoView) {
+	m.allRows = prs
+	m.rebuild()
 }

@@ -1,0 +1,18 @@
+services:
+  pr-fetcher:
+    build: .
+    container_name: pr-fetcher
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - ./config:/config
+    environment:
+      - OUTPUT_PATH=/data/prs.json
+      - SHEET_ID=${SHEET_ID}
+      - SHEET_GID=${SHEET_GID}
+      - GOOGLE_SECRET=/config/client_secret.json
+      - GOOGLE_TOKEN=/config/google-token.json
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - SHEET_POLL_INTERVAL=2m
+      - HYDRATION_INTERVAL=5s
+      - WORKERS=5

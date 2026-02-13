@@ -11,11 +11,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/formatters"
-	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/mattn/go-runewidth"
+	ghpkg "github.com/revelo/pr-filter/internal/github"
 )
 
 func fetchDiffCmd(prURL, token string) tea.Cmd {
@@ -40,7 +37,7 @@ func fetchDiffCmd(prURL, token string) tea.Cmd {
 }
 
 func fetchDiff(prURL, token string) (string, error) {
-	owner, repo, number, err := parsePRURL(prURL)
+	owner, repo, number, err := ghpkg.ParsePRURL(prURL)
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +80,7 @@ func isDiffTooLarge(err error) bool {
 }
 
 func fetchDiffFiles(prURL, token string) ([]string, error) {
-	owner, repo, number, err := parsePRURL(prURL)
+	owner, repo, number, err := ghpkg.ParsePRURL(prURL)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +133,7 @@ func fetchDiffFiles(prURL, token string) ([]string, error) {
 }
 
 func renderDiff(content string) (string, error) {
-	return highlightDiff(content)
+	return renderInlineDiff(content), nil
 }
 
 type diffSection struct {
@@ -312,64 +309,24 @@ func styleSideCell(value string, kind string) string {
 }
 
 func renderDiffSection(section diffSection) (string, error) {
-	return highlightDiff(section.raw)
+	return renderInlineDiff(section.raw), nil
 }
 
-func highlightDiff(content string) (string, error) {
-	lexer := lexers.Get("diff")
-	if lexer == nil {
-		lexer = lexers.Analyse(content)
+func renderInlineDiff(raw string) string {
+	lines := strings.Split(raw, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, styleSideCell(line, inlineLineType(line)))
 	}
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-	style := styles.Get("github")
-	if style == nil {
-		style = styles.Fallback
-	}
-	style = stripBackground(style)
-	formatter := formatters.Get("terminal256")
-	if formatter == nil {
-		return content, nil
-	}
-
-	iterator, err := lexer.Tokenise(nil, content)
-	if err != nil {
-		return content, nil
-	}
-
-	var buf bytes.Buffer
-	if err := formatter.Format(&buf, style, iterator); err != nil {
-		return content, nil
-	}
-	return buf.String(), nil
+	return strings.Join(out, "\n")
 }
 
-func stripBackground(style *chroma.Style) *chroma.Style {
-	builder := chroma.NewStyleBuilder(style.Name + "-nobg")
-	for _, ttype := range style.Types() {
-		entry := style.Get(ttype)
-		if entry.Background.IsSet() && !entry.Colour.IsSet() {
-			entry.Colour = entry.Background
-		}
-		entry.Background = 0
-		entry.Border = 0
-		builder.AddEntry(ttype, entry)
+func inlineLineType(line string) string {
+	if strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "index ") || strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") {
+		return "header"
 	}
-
-	builder.AddEntry(chroma.GenericInserted, chroma.StyleEntry{
-		Colour:    chroma.MustParseColour("#5fd75f"),
-		Bold:      chroma.Yes,
-		NoInherit: true,
-	})
-	builder.AddEntry(chroma.GenericDeleted, chroma.StyleEntry{
-		Colour:    chroma.MustParseColour("#ff5f5f"),
-		Bold:      chroma.Yes,
-		NoInherit: true,
-	})
-	newStyle, err := builder.Build()
-	if err != nil {
-		return style
+	if strings.HasPrefix(line, "@@") {
+		return "hunk"
 	}
-	return newStyle
+	return lineType(line)
 }

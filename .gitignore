@@ -29,3 +29,11 @@ Thumbs.db
 # Output files
 filtered_results.json
 all_results.json
+
+# Data files (written by fetcher)
+data/prs.json
+data/prs.json.tmp
+
+# Config files with secrets
+config/google-token.json
+config/client_secret*.json
