@@ -1,4 +1,4 @@
-.PHONY: build-fetcher build-tui docker-up docker-down setup-google-auth clean test deps help
+.PHONY: build-fetcher build-tui build-evaluator docker-up docker-down setup-google-auth clean test deps help
 
 OUTPUT_DIR=bin
 
@@ -16,12 +16,23 @@ build-tui:
 	go build -o $(OUTPUT_DIR)/pr-filter-tui ./cmd/pr-filter-tui
 	@echo "Build complete: $(OUTPUT_DIR)/pr-filter-tui"
 
-# Build both
-build: build-fetcher build-tui
+# Build the AI evaluator
+build-evaluator:
+	@echo "Building pr-evaluator..."
+	@mkdir -p $(OUTPUT_DIR)
+	go build -o $(OUTPUT_DIR)/pr-evaluator ./cmd/pr-evaluator
+	@echo "Build complete: $(OUTPUT_DIR)/pr-evaluator"
+
+# Build all
+build: build-fetcher build-tui build-evaluator
 
 # Run the fetcher locally (no Docker)
 run-fetcher: build-fetcher
 	$(OUTPUT_DIR)/pr-fetcher
+
+# Run the AI evaluator locally
+run-evaluator: build-evaluator
+	$(OUTPUT_DIR)/pr-evaluator
 
 # Run the TUI against data file
 run-tui: build-tui
@@ -67,8 +78,10 @@ help:
 	@echo "Available targets:"
 	@echo "  build-fetcher      - Build the data-gathering service"
 	@echo "  build-tui          - Build the TUI application"
-	@echo "  build              - Build both binaries"
+	@echo "  build-evaluator    - Build the AI evaluator"
+	@echo "  build              - Build all binaries"
 	@echo "  run-fetcher        - Run fetcher locally"
+	@echo "  run-evaluator      - Run AI evaluator locally"
 	@echo "  run-tui            - Run TUI against data/prs.json"
 	@echo "  docker-up          - Start fetcher in Docker"
 	@echo "  docker-down        - Stop Docker container"
@@ -79,8 +92,13 @@ help:
 	@echo "  test               - Run tests"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  GITHUB_TOKEN  - Required for GitHub API access"
-	@echo "  SHEET_ID      - Google Sheet ID"
-	@echo "  SHEET_GID     - Sheet tab GID"
-	@echo "  GOOGLE_SECRET - Path to Google OAuth client secret"
-	@echo "  GOOGLE_TOKEN  - Path to Google OAuth token cache"
+	@echo "  GITHUB_TOKEN    - Required for GitHub API access"
+	@echo "  SHEET_ID        - Google Sheet ID"
+	@echo "  SHEET_GID       - Sheet tab GID"
+	@echo "  GOOGLE_SECRET   - Path to Google OAuth client secret"
+	@echo "  GOOGLE_TOKEN    - Path to Google OAuth token cache"
+	@echo "  ANTHROPIC_API_KEY - Required for AI evaluator"
+	@echo "  AI_MODEL        - AI model (default: claude-haiku-4-5-20251001)"
+	@echo "  AI_COST_LIMIT   - Max USD spend (default: 5.00)"
+	@echo "  AI_EVAL_INTERVAL - Polling interval (default: 30s)"
+	@echo "  AI_EVAL_BATCH   - PRs per cycle (default: 5)"

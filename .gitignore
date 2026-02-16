@@ -37,3 +37,10 @@ data/prs.json.tmp
 # Config files with secrets
 config/google-token.json
 config/client_secret*.json
+
+# Environment files
+.env
+
+# AI evaluations data
+data/ai-evaluations.json
+data/ai-evaluations.json.tmp

@@ -23,6 +23,20 @@ func ParsePRURL(url string) (owner, repo string, number int, err error) {
 	return owner, repo, number, nil
 }
 
+// ParseIssueURL extracts owner, repo, and issue number from a GitHub issue URL.
+func ParseIssueURL(url string) (owner, repo string, number int, err error) {
+	re := regexp.MustCompile(`github\.com/([^/]+)/([^/]+)/issues/(\d+)`)
+	matches := re.FindStringSubmatch(url)
+	if len(matches) != 4 {
+		return "", "", 0, fmt.Errorf("invalid issue URL: %s", url)
+	}
+
+	owner = matches[1]
+	repo = matches[2]
+	fmt.Sscanf(matches[3], "%d", &number)
+	return owner, repo, number, nil
+}
+
 // CheckForTestFiles returns true if any of the given files are test files.
 func CheckForTestFiles(files []*gh.CommitFile) bool {
 	testPatterns := []string{

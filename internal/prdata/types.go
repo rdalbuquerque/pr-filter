@@ -2,6 +2,13 @@ package prdata
 
 import "time"
 
+// FileDetail holds per-file change statistics from a PR.
+type FileDetail struct {
+	Path      string `json:"path"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+}
+
 // PRInfo holds all metadata about a pull request.
 // Checked/Saved are TUI-local state and not included here.
 type PRInfo struct {
@@ -18,7 +25,8 @@ type PRInfo struct {
 	Hydration      int    `json:"hydration"`
 	HydrationError string `json:"hydration_error,omitempty"`
 	HydrationRetries int  `json:"hydration_retries,omitempty"`
-	ResolvedIssue string   `json:"resolved_issue"`
+	FileBreakdown []FileDetail `json:"file_breakdown,omitempty"`
+	ResolvedIssue string       `json:"resolved_issue"`
 	IssueCount    int      `json:"issue_count"`
 	PassesFilter  bool     `json:"passes_filter"`
 	FailReasons   []string `json:"fail_reasons"`

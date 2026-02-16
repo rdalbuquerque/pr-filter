@@ -21,8 +21,11 @@ import (
 // PRInfoView wraps prdata.PRInfo with TUI-local state.
 type PRInfoView struct {
 	prdata.PRInfo
-	Checked bool
-	Saved   bool
+	Checked       bool
+	Saved         bool
+	AIRecommended bool
+	AIScore       int
+	AIReasoning   string
 }
 
 type Options struct {
@@ -83,9 +86,10 @@ type Model struct {
 	diffViewportHeight int
 	debugLog           func(string)
 
-	filterMode bool
-	inputs     []textinput.Model
-	inputFocus int
+	filterMode      bool
+	inputs          []textinput.Model
+	inputFocus      int
+	userInteracted  map[string]bool // tracks PRs the user explicitly toggled
 }
 
 type prItem struct {
@@ -178,20 +182,30 @@ func NewModel(prs []PRInfoView, opts Options) Model {
 		filters = prdata.DefaultFilters()
 	}
 
+	// Build set of PRs the user has explicitly interacted with
+	// (any PR that has Checked or Saved set at load time came from local-state.json)
+	interacted := make(map[string]bool)
+	for _, pr := range prs {
+		if pr.Checked || pr.Saved {
+			interacted[pr.URL] = true
+		}
+	}
+
 	m := Model{
-		allRows:     prs,
-		filters:     filters,
-		list:        l,
-		sortBy:      opts.SortBy,
-		sortDesc:    opts.SortDesc,
-		logs:        append([]string{}, opts.Logs...),
-		githubToken: opts.GitHubToken,
-		viewport:    viewport.New(viewport.WithWidth(0), viewport.WithHeight(0)),
-		saveFilters: opts.SaveFilters,
-		savePR:      opts.SavePR,
-		viewMode:    "active",
-		diffLayout:  "side",
-		debugLog:    opts.DebugLog,
+		allRows:        prs,
+		filters:        filters,
+		list:           l,
+		sortBy:         opts.SortBy,
+		sortDesc:       opts.SortDesc,
+		logs:           append([]string{}, opts.Logs...),
+		githubToken:    opts.GitHubToken,
+		viewport:       viewport.New(viewport.WithWidth(0), viewport.WithHeight(0)),
+		saveFilters:    opts.SaveFilters,
+		savePR:         opts.SavePR,
+		viewMode:       "active",
+		diffLayout:     "side",
+		debugLog:       opts.DebugLog,
+		userInteracted: interacted,
 	}
 	m.viewport.FillHeight = true
 	m.viewport.SoftWrap = false
@@ -293,8 +307,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // dataFileChangedMsg is sent when the data file is updated by the fetcher.
 type dataFileChangedMsg struct {
-	PRs   []prdata.PRInfo
-	Stats prdata.DataStats
+	PRs         []prdata.PRInfo
+	Stats       prdata.DataStats
+	Evaluations map[string]prdata.AIEvaluation
 }
 
 func (m *Model) handleDataFileChanged(msg dataFileChangedMsg) {
@@ -312,7 +327,7 @@ func (m *Model) handleDataFileChanged(msg dataFileChangedMsg) {
 		localState[pr.URL] = struct{ Checked, Saved bool }{pr.Checked, pr.Saved}
 	}
 
-	// Merge new data with local state
+	// Merge new data with local state and AI evaluations
 	newRows := make([]PRInfoView, 0, len(msg.PRs))
 	for _, pr := range msg.PRs {
 		view := PRInfoView{PRInfo: pr}
@@ -320,6 +335,26 @@ func (m *Model) handleDataFileChanged(msg dataFileChangedMsg) {
 			view.Checked = state.Checked
 			view.Saved = state.Saved
 		}
+
+		// Merge AI evaluation data
+		if msg.Evaluations != nil {
+			if eval, ok := msg.Evaluations[pr.URL]; ok {
+				view.AIRecommended = eval.Recommended
+				view.AIScore = eval.Score
+				view.AIReasoning = eval.Reasoning
+
+				// Auto-favorite: if AI recommends and user never interacted
+				if eval.Recommended && !m.userInteracted[pr.URL] {
+					view.Saved = true
+					if m.savePR != nil {
+						m.savePR(view)
+					}
+					// Mark as interacted so we don't re-favorite on next reload
+					m.userInteracted[pr.URL] = true
+				}
+			}
+		}
+
 		newRows = append(newRows, view)
 	}
 
@@ -527,6 +562,10 @@ func (m *Model) formatRow(pr PRInfoView) string {
 	mark := ""
 	if pr.Checked {
 		mark = "x"
+	} else if pr.AIRecommended && pr.Saved {
+		mark = "AS"
+	} else if pr.AIRecommended {
+		mark = "A"
 	} else if pr.Saved {
 		mark = "S"
 	}
@@ -900,6 +939,7 @@ func (m *Model) toggleChecked() {
 				pr.Saved = false
 			}
 			m.allRows[i] = pr
+			m.userInteracted[pr.URL] = true
 			if m.savePR != nil {
 				m.savePR(pr)
 			}
@@ -923,6 +963,7 @@ func (m *Model) toggleSaved() {
 				pr.Checked = false
 			}
 			m.allRows[i] = pr
+			m.userInteracted[pr.URL] = true
 			if m.savePR != nil {
 				m.savePR(pr)
 			}
@@ -1277,6 +1318,9 @@ func (m Model) viewDetail() string {
 		}
 	}
 	metaLine := fmt.Sprintf("Stars: %s | Files: %d | Lines: %d | Tests changed: %s", stars, m.detailPR.FilesChanged, m.detailPR.LinesChanged, tests)
+	if m.detailPR.AIScore > 0 {
+		metaLine += fmt.Sprintf(" | AI: %d/10 — %q", m.detailPR.AIScore, m.detailPR.AIReasoning)
+	}
 	tabs := fmt.Sprintf("[%s] [%s]", diffTab, issueTab)
 	status := ""
 	if m.detailTab == "diff" {

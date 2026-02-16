@@ -231,6 +231,11 @@ func (s *service) pickBatch() []prdata.PRInfo {
 			pass1 = append(pass1, pr)
 		case 1:
 			pass2 = append(pass2, pr)
+		case 2:
+			// Backfill: re-run pass2 for PRs missing file breakdown
+			if len(pr.FileBreakdown) == 0 {
+				pass2 = append(pass2, pr)
+			}
 		}
 	}
 
@@ -304,13 +309,24 @@ func hydratePass2(ctx context.Context, client *gh.Client, pr prdata.PRInfo) (prd
 		pr.StarsKnown = true
 	}
 
-	if !pr.HasTestKnown {
+	if !pr.HasTestKnown || len(pr.FileBreakdown) == 0 {
 		files, err := ghpkg.FetchAllPRFiles(ctx, client, owner, repo, number)
 		if err != nil {
 			return pr, err
 		}
 		pr.HasTestFiles = ghpkg.CheckForTestFiles(files)
 		pr.HasTestKnown = true
+
+		// Store per-file breakdown for AI evaluation
+		breakdown := make([]prdata.FileDetail, 0, len(files))
+		for _, f := range files {
+			breakdown = append(breakdown, prdata.FileDetail{
+				Path:      f.GetFilename(),
+				Additions: f.GetAdditions(),
+				Deletions: f.GetDeletions(),
+			})
+		}
+		pr.FileBreakdown = breakdown
 	}
 
 	pr.Hydration = 2
