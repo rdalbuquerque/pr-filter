@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 )
 
 // HeuristicResult holds the outcome of the heuristic pre-filter.

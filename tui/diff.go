@@ -12,7 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
-	ghpkg "github.com/revelo/pr-filter/internal/github"
+	ghpkg "github.com/rdalbuquerque/pr-filter/internal/github"
 )
 
 func fetchDiffCmd(prURL, token string) tea.Cmd {

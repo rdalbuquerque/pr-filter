@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 )
 
 const (

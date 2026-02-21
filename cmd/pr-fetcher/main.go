@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	ghpkg "github.com/revelo/pr-filter/internal/github"
-	"github.com/revelo/pr-filter/internal/prdata"
-	"github.com/revelo/pr-filter/internal/storage"
+	ghpkg "github.com/rdalbuquerque/pr-filter/internal/github"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/storage"
 )
 
 type serviceConfig struct {

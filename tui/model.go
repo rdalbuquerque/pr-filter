@@ -15,8 +15,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/mattn/go-runewidth"
-	ghpkg "github.com/revelo/pr-filter/internal/github"
-	"github.com/revelo/pr-filter/internal/prdata"
+	ghpkg "github.com/rdalbuquerque/pr-filter/internal/github"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 )
 
 // PRInfoView wraps prdata.PRInfo with TUI-local state.

@@ -1,4 +1,4 @@
-module github.com/revelo/pr-filter
+module github.com/rdalbuquerque/pr-filter
 
 go 1.24.2
 

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/revelo/pr-filter/internal/prdata"
-	"github.com/revelo/pr-filter/tui"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/tui"
 )
 
 const defaultAzureStorageAccount = "prfilterdata"

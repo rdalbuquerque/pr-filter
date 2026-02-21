@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/fsnotify/fsnotify"
-	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 )
 
 // WatchDataFiles watches both the data file and the AI evaluations file for

@@ -9,10 +9,10 @@ import (
 	"time"
 
 	gh "github.com/google/go-github/v58/github"
-	ghpkg "github.com/revelo/pr-filter/internal/github"
-	"github.com/revelo/pr-filter/internal/prdata"
-	"github.com/revelo/pr-filter/internal/sheets"
-	"github.com/revelo/pr-filter/internal/storage"
+	ghpkg "github.com/rdalbuquerque/pr-filter/internal/github"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/sheets"
+	"github.com/rdalbuquerque/pr-filter/internal/storage"
 	"golang.org/x/oauth2"
 )
 

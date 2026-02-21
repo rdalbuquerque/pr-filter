@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"

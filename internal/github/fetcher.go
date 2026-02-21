@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	gh "github.com/google/go-github/v58/github"
-	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/rdalbuquerque/pr-filter/internal/prdata"
 	"golang.org/x/oauth2"
 )
 
