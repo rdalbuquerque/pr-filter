@@ -67,12 +67,22 @@ The system has three components:
 ### Running the backend services
 
 ```sh
-# Copy and fill in environment variables
+# 1. Copy and fill in environment variables
 cp .env.example .env
+# Edit .env with your GITHUB_TOKEN, SHEET_ID, SHEET_GID, ANTHROPIC_API_KEY, AZURE_STORAGE_KEY
 
-# Run both services in Docker
+# 2. Place your Google OAuth client secret in config/
+#    Download it from https://console.cloud.google.com/apis/credentials
+cp ~/Downloads/client_secret_*.json config/
+
+# 3. Run the one-time Google OAuth setup (opens a browser for consent)
+make setup-google-auth
+
+# 4. Start both services
 docker compose up -d
 ```
+
+The Google OAuth token is saved to `config/google-token.json` and mounted into the pr-fetcher container. If it expires, delete the token file and re-run `make setup-google-auth`.
 
 ### Building from source
 
