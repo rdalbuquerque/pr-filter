@@ -1,310 +1,96 @@
 # PR Filter
 
-A Go application to filter GitHub Pull Requests based on specific criteria.
+A TUI application for browsing and filtering GitHub Pull Requests, with AI-powered evaluation. Data is fetched from Google Sheets, hydrated via the GitHub API, and published to Azure Blob Storage. The TUI reads from Azure by default — no credentials needed to browse.
 
-## Filter Criteria
+## Install
 
-The application filters PRs based on the following requirements:
-
-1. **4+ files changed** - PR must modify at least 4 files
-2. **Test files included** - PR must change at least one test file
-3. **200+ stars** - Repository must have at least 200 stars
-4. **50+ lines of code** - PR must change at least 50 lines (additions + deletions)
-5. **Single issue resolution** - PR must resolve exactly one issue
-
-## Performance
-
-- **Concurrent processing**: Uses 10 workers by default for parallel PR fetching
-- **Fast**: Can process 100 PRs in under a minute (network and GitHub API dependent)
-- **Configurable**: Adjust worker count with `-workers` flag (increase for speed, decrease to avoid rate limits)
-
-## Installation
-
-```bash
-cd pr-filter
-go mod download
-go build -o pr-filter
+```sh
+curl -sSL https://raw.githubusercontent.com/rdalbuquerque/pr-filter/main/install.sh | sh
 ```
+
+This installs the `pr-filter-tui` binary to `/usr/local/bin`. Customize with:
+
+```sh
+# Install to a different directory
+curl -sSL https://raw.githubusercontent.com/rdalbuquerque/pr-filter/main/install.sh | INSTALL_DIR=~/.local/bin sh
+
+# Install a specific version
+curl -sSL https://raw.githubusercontent.com/rdalbuquerque/pr-filter/main/install.sh | VERSION=v0.1.0 sh
+```
+
+Or download binaries directly from [Releases](https://github.com/rdalbuquerque/pr-filter/releases).
 
 ## Usage
 
-### Authentication
+```sh
+# Browse PRs (fetches data from Azure, no credentials needed)
+pr-filter-tui
 
-The application supports two methods of GitHub authentication:
+# Optional: set GitHub token for fetching PR diffs and issue bodies
+export GITHUB_TOKEN=ghp_...
+pr-filter-tui
 
-**Option 1: Device Flow (Recommended)**
-
-Device flow allows authentication without storing personal access tokens. To use it:
-
-1. Create a GitHub OAuth App at https://github.com/settings/developers
-   - Set the app name to "pr-filter" (or any name you prefer)
-   - No callback URL needed for device flow
-   - Note the Client ID
-
-2. Set the Client ID as an environment variable:
-```bash
-export GITHUB_CLIENT_ID=your_oauth_app_client_id
+# Use a local data file instead of Azure
+pr-filter-tui --data data/prs.json
 ```
 
-3. Run the app - it will guide you through authentication on first use
+## TUI Controls
 
-**Option 2: Personal Access Token**
-Set your GitHub token as an environment variable:
+| Key | Action |
+|-----|--------|
+| `q` | Quit |
+| `enter` | View PR details |
+| `f` | Filters |
+| `r` | Reset filters to defaults |
+| `c` | Clear filters |
+| `/` | Search |
+| `n` / `p` | Next / previous page |
+| `g` / `G` | First / last page |
+| `s` | Cycle sort field (lines, files, stars, repository) |
+| `o` | Toggle sort order |
+| `x` | Toggle checked |
+| `m` | Toggle saved/favorite |
+| `v` | Toggle view (active / saved / checked) |
+| `R` | Reload data from Azure |
+| `l` | Logs |
+| `tab` | Switch detail tabs (Diff / Issue) |
+| `d` | Toggle diff layout (unified / side-by-side) |
 
-```bash
-export GITHUB_TOKEN=your_github_token_here
+## Architecture
+
+The system has three components:
+
+- **pr-fetcher** — reads PR URLs from Google Sheets, hydrates via GitHub API, publishes `prs.json` to Azure Blob Storage
+- **pr-evaluator** — runs AI evaluation on PRs using Claude, publishes `ai-evaluations.json` to Azure Blob Storage
+- **pr-filter-tui** — terminal UI that reads from Azure (or local files) and lets you browse, filter, and evaluate PRs
+
+### Running the backend services
+
+```sh
+# Copy and fill in environment variables
+cp .env.example .env
+
+# Run both services in Docker
+docker compose up -d
 ```
 
-To clear saved credentials and re-authenticate:
-```bash
-./pr-filter -clear-token
-# or for TUI:
-./pr-filter-tui -clear-github-token
+### Building from source
+
+```sh
+make build          # Build all binaries
+make build-tui      # Build TUI only
+make build-fetcher  # Build fetcher only
+make build-evaluator # Build evaluator only
 ```
 
-### Basic Usage
+## Environment Variables
 
-```bash
-# From a file
-./pr-filter -input sample_prs.txt
-
-# Or via stdin
-cat prs.txt | ./pr-filter
-
-# Or interactively
-./pr-filter
-# Then paste URLs, one per line
-# Press Ctrl+D when done
-```
-
-### Advanced Usage
-
-```bash
-# Sorting examples
-./pr-filter -input sample_prs.txt -sort lines        # Sort by lines changed (default, descending)
-./pr-filter -input sample_prs.txt -sort stars        # Sort by repository stars
-./pr-filter -input sample_prs.txt -sort files        # Sort by files changed
-./pr-filter -input sample_prs.txt -sort repository   # Sort alphabetically by repo name
-./pr-filter -input sample_prs.txt -sort lines -sort-order asc  # Sort by lines, ascending
-
-# Show all PRs (including those that failed filters)
-./pr-filter -input sample_prs.txt -all
-
-# Verbose output to see what's happening
-./pr-filter -input sample_prs.txt -verbose
-
-# Output as JSON instead of table
-./pr-filter -input sample_prs.txt -output json > filtered_prs.json
-
-# Use more workers for faster processing (default is 10)
-./pr-filter -input sample_prs.txt -workers 20
-
-# Use fewer workers to avoid rate limits
-./pr-filter -input sample_prs.txt -workers 3
-
-# Custom filter criteria
-./pr-filter -input sample_prs.txt \
-  -min-files 10 \
-  -min-stars 500 \
-  -min-lines 100 \
-  -require-tests=false
-
-# Combine options: relaxed filters, sort by stars, JSON output
-./pr-filter -input sample_prs.txt \
-  -min-files 2 \
-  -min-stars 100 \
-  -sort stars \
-  -output json > top_starred.json
-
-# Save table results to file
-./pr-filter -input sample_prs.txt > filtered_prs.txt
-
-# Use with Make
-make run
-```
-
-### CLI Flags
-
-**Input/Output:**
-- `-input <file>` - Input file containing PR URLs (default: stdin)
-- `-output <format>` - Output format: `table` or `json` (default: table)
-- `-all` - Show all PRs including those that failed filters (default: false)
-- `-verbose` - Show verbose progress output (default: false)
-
-**Sorting:**
-- `-sort <field>` - Sort by: `lines`, `files`, `stars`, `repository` (default: lines)
-- `-sort-order <order>` - Sort order: `asc` or `desc` (default: desc)
-
-**Performance:**
-- `-workers <n>` - Number of concurrent workers (default: 10)
-
-**Filter Criteria:**
-- `-min-files <n>` - Minimum files changed (default: 4)
-- `-min-stars <n>` - Minimum repository stars (default: 200)
-- `-min-lines <n>` - Minimum lines changed (default: 50)
-- `-require-tests` - Require test files to be changed (default: true)
-- `-single-issue` - Require exactly one issue resolved (default: true)
-
-## Input Format
-
-One PR URL per line:
-
-```
-https://github.com/owner/repo/pull/123
-https://github.com/owner/repo/pull/456
-```
-
-## Output Format
-
-### Table Format (Default)
-
-Results are displayed in a kubectl-style table, sorted by lines changed (descending) by default:
-
-```
-REPOSITORY                  STARS   FILES   LINES   RESOLVED ISSUE
-abetlen/llama-cpp-python    9931    22      2261    https://github.com/abetlen/llama-cpp-python/issues/489
-abhiTronix/vidgear          3421    11      284     https://github.com/abhiTronix/vidgear/issues/242
-alteryx/featuretools        7234    8       156     https://github.com/alteryx/featuretools/issues/2701
-```
-
-**Sort Options:**
-- `lines` - Total lines changed (additions + deletions) - **default**
-- `files` - Number of files changed
-- `stars` - Repository star count
-- `repository` - Alphabetical by repository name
-
-### JSON Format
-
-Use `-output json` for JSON output:
-
-```json
-[
-  {
-    "url": "https://github.com/owner/repo/pull/123",
-    "title": "PR Title",
-    "number": 123,
-    "repository": "owner/repo",
-    "stars": 1500,
-    "files_changed": 10,
-    "lines_changed": 250,
-    "has_test_files": true,
-    "resolved_issue": "https://github.com/owner/repo/issues/100",
-    "issue_count": 1,
-    "passes_filter": true,
-    "fail_reasons": []
-  }
-]
-```
-
-## Fields Explained
-
-- `url`: Original PR URL
-- `title`: PR title
-- `number`: PR number
-- `repository`: Repository in "owner/repo" format
-- `stars`: Number of stars the repository has
-- `files_changed`: Number of files modified in the PR
-- `lines_changed`: Total lines added + deleted
-- `has_test_files`: Whether the PR modifies test files
-- `resolved_issue`: URL of the resolved issue (if exactly 1)
-- `issue_count`: Number of issues referenced in PR body
-- `passes_filter`: Whether the PR passes all criteria
-- `fail_reasons`: Array of reasons why PR failed (empty if passed)
-
-## Issue Detection
-
-The tool detects issues referenced in the PR body using these patterns:
-
-- `fixes #123`
-- `closes #456`
-- `resolves #789`
-- `(Closes #123)`
-- Full issue URLs: `https://github.com/owner/repo/issues/123`
-
-Case-insensitive matching for keywords: fix, fixes, fixed, close, closes, closed, resolve, resolves, resolved.
-
-## Example
-
-```bash
-# Create a sample input file
-cat > prs.txt << 'EOF'
-https://github.com/abetlen/llama-cpp-python/pull/1257
-https://github.com/abetlen/llama-cpp-python/pull/499
-EOF
-
-# Run the filter
-export GITHUB_TOKEN=ghp_your_token_here
-cat prs.txt | ./pr-filter > filtered_results.json
-
-# Check filtered count
-cat filtered_results.json | jq 'length'
-```
-
-## Troubleshooting
-
-**Error: GITHUB_TOKEN environment variable is required**
-- Make sure to set your GitHub Personal Access Token
-
-**Error: failed to fetch PR**
-- Check that the PR URL is correct
-- Verify your token has the required permissions
-- Check if the repository is private (token needs access)
-
-**No PRs in output**
-- Check the criteria - they are intentionally strict
-- Review the debug output (stderr) to see filtering stats
-
-## TUI (Bubble Tea v2)
-
-This repository includes a Bubble Tea v2 TUI for navigating cached PR data with filters and pagination.
-
-### Build
-
-```bash
-go build -o bin/pr-filter-tui ./cmd/pr-filter-tui
-```
-
-### Run
-
-```bash
-# Fetch from Google Sheets if cache is empty (defaults from config)
-# Option 1: Use device flow (set GITHUB_CLIENT_ID first)
-export GITHUB_CLIENT_ID=your_oauth_app_client_id
-./bin/pr-filter-tui
-
-# Option 2: Use personal access token
-export GITHUB_TOKEN=your_token_here
-./bin/pr-filter-tui
-
-# Optional overrides
-./bin/pr-filter-tui -refresh              # Force refresh from Google Sheets
-./bin/pr-filter-tui -force-auth           # Force re-authentication with GitHub
-./bin/pr-filter-tui -clear-cache          # Clear cached PRs
-./bin/pr-filter-tui -clear-github-token   # Clear saved GitHub token
-./bin/pr-filter-tui -cache /tmp/prs.db    # Use custom cache location
-```
-
-The sheet must include columns named `taken` and `pr_link`. Only rows where `taken` is empty/false are fetched.
-
-Config is stored at `~/.config/pr-filter/config.json` and is created on first run with defaults:
-- `sheet_id`: `1WnGf8ULFHVpTjnpLz46DH-UrvOCLtkDmqilZLzaS4KM`
-- `sheet_gid`: `1547645354`
-- `cache_path`: `~/.config/pr-filter/cache.db`
-- `google_secret`: `client_secret_1047690774768-7u0fn9fkn61g2nhu1kcrsj0otdoobjtg.apps.googleusercontent.com.json`
-
-### Controls
-
-- `q` quit
-- `f` filters
-- `r` reset filters to defaults
-- `c` clear filters
-- `/` search
-- `n`/`p` next/previous page
-- `g`/`G` first/last page
-- `s` cycle sort field (lines, files, stars, repository)
-- `o` toggle sort order
-- `l` logs
-- `enter` view PR details
-- `x` toggle checked
-- `m` toggle saved
-- `v` toggle view (active/saved/checked)
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_TOKEN` | Optional | GitHub token for fetching PR diffs/issues in TUI |
+| `AZURE_STORAGE_ACCOUNT` | Optional | Storage account name (default: `prfilterdata`) |
+| `AZURE_CONTAINER` | Optional | Blob container name (default: `prdata`) |
+| `SHEET_ID` | Backend | Google Sheet ID |
+| `SHEET_GID` | Backend | Sheet tab GID |
+| `ANTHROPIC_API_KEY` | Backend | For AI evaluator |
+| `AZURE_STORAGE_KEY` | Backend | For publishing to Azure |
