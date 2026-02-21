@@ -1,6 +1,8 @@
 services:
   pr-fetcher:
-    build: .
+    build:
+      context: .
+      target: pr-fetcher
     container_name: pr-fetcher
     restart: unless-stopped
     volumes:
@@ -16,3 +18,27 @@ services:
       - SHEET_POLL_INTERVAL=2m
       - HYDRATION_INTERVAL=5s
       - WORKERS=5
+      - AZURE_STORAGE_ACCOUNT=${AZURE_STORAGE_ACCOUNT}
+      - AZURE_STORAGE_KEY=${AZURE_STORAGE_KEY}
+      - AZURE_CONTAINER=${AZURE_CONTAINER:-prdata}
+
+  pr-evaluator:
+    build:
+      context: .
+      target: pr-evaluator
+    container_name: pr-evaluator
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - AI_MODEL=${AI_MODEL:-claude-haiku-4-5-20251001}
+      - AI_COST_LIMIT=${AI_COST_LIMIT:-1.50}
+      - AI_EVAL_INTERVAL=${AI_EVAL_INTERVAL:-30s}
+      - AI_EVAL_BATCH=${AI_EVAL_BATCH:-5}
+      - DATA_PATH=/data/prs.json
+      - EVAL_PATH=/data/ai-evaluations.json
+      - AZURE_STORAGE_ACCOUNT=${AZURE_STORAGE_ACCOUNT}
+      - AZURE_STORAGE_KEY=${AZURE_STORAGE_KEY}
+      - AZURE_CONTAINER=${AZURE_CONTAINER:-prdata}

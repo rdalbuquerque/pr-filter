@@ -13,9 +13,12 @@ import (
 	"github.com/revelo/pr-filter/tui"
 )
 
+const defaultAzureStorageAccount = "prfilterdata"
+const defaultAzureContainer = "prdata"
+
 func main() {
-	dataPath := flag.String("data", "", "Path to prs.json data file (required)")
-	evalPath := flag.String("eval", "", "Path to ai-evaluations.json (default: data/ai-evaluations.json relative to data file)")
+	dataPath := flag.String("data", "", "Path to local prs.json (if omitted, fetches from Azure Blob Storage)")
+	evalPath := flag.String("eval", "", "Path to local ai-evaluations.json")
 	statePath := flag.String("state", "", "Path to local-state.json (default: ~/.config/pr-filter/local-state.json)")
 	configPath := flag.String("config", "", "Path to config file for filter/sort prefs")
 	pageSize := flag.Int("page-size", 50, "Number of rows per page")
@@ -23,38 +26,47 @@ func main() {
 	sortOrder := flag.String("sort-order", "desc", "Sort order: asc or desc")
 	flag.Parse()
 
-	if *dataPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: --data flag is required (path to prs.json)")
-		flag.Usage()
-		os.Exit(1)
-	}
-
 	// Resolve state path
 	localStatePath := *statePath
 	if localStatePath == "" {
 		localStatePath = tui.DefaultLocalStatePath()
 	}
 
-	// Resolve AI evaluations path
-	resolvedEvalPath := *evalPath
-	if resolvedEvalPath == "" {
-		resolvedEvalPath = filepath.Join(filepath.Dir(*dataPath), "ai-evaluations.json")
-	}
-
-	// Load data file
-	df, err := prdata.LoadDataFile(*dataPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading data file: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Load AI evaluations (non-fatal if missing)
+	var df *prdata.DataFile
 	var aiEvals map[string]prdata.AIEvaluation
-	ef, err := prdata.LoadAIEvaluationsFile(resolvedEvalPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not load AI evaluations: %v\n", err)
-	} else if ef != nil {
-		aiEvals = ef.Evaluations
+	var dataSource string
+	var reloadSource *tui.ReloadSource
+	loadOnStart := false
+
+	if *dataPath != "" {
+		// Local file mode
+		dataSource = *dataPath
+		var err error
+		df, err = prdata.LoadDataFile(*dataPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading data file: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Load AI evaluations from local file
+		resolvedEvalPath := *evalPath
+		if resolvedEvalPath == "" {
+			resolvedEvalPath = filepath.Join(filepath.Dir(*dataPath), "ai-evaluations.json")
+		}
+		ef, err := prdata.LoadAIEvaluationsFile(resolvedEvalPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not load AI evaluations: %v\n", err)
+		} else if ef != nil {
+			aiEvals = ef.Evaluations
+		}
+	} else {
+		// Azure Blob Storage mode — start TUI immediately and load data with progress
+		account := envOrDefault("AZURE_STORAGE_ACCOUNT", defaultAzureStorageAccount)
+		container := envOrDefault("AZURE_CONTAINER", defaultAzureContainer)
+		dataSource = fmt.Sprintf("https://%s.blob.core.windows.net/%s", account, container)
+		reloadSource = &tui.ReloadSource{Account: account, Container: container}
+		df = &prdata.DataFile{Version: 1}
+		loadOnStart = true
 	}
 
 	// Load local state
@@ -72,7 +84,7 @@ func main() {
 	prs := mergePRsWithLocalState(df.PRs, localState, aiEvals)
 
 	logs := []string{
-		fmt.Sprintf("Loaded %d PRs from %s", len(df.PRs), *dataPath),
+		fmt.Sprintf("Loaded %d PRs from %s", len(df.PRs), dataSource),
 		fmt.Sprintf("Data updated at: %s", df.UpdatedAt.Format(time.RFC3339)),
 		fmt.Sprintf("Stats: %d total, %d pass1, %d pass2, %d taken",
 			df.Stats.TotalFromSheet, df.Stats.HydratedPass1, df.Stats.HydratedPass2, df.Stats.TakenCount),
@@ -99,12 +111,14 @@ func main() {
 	githubToken := os.Getenv("GITHUB_TOKEN")
 
 	model := tui.NewModel(prs, tui.Options{
-		PageSize:    *pageSize,
-		SortBy:      *sortBy,
-		SortDesc:    sortDesc,
-		Logs:        logs,
-		GitHubToken: githubToken,
-		Filters:     filters,
+		PageSize:     *pageSize,
+		SortBy:       *sortBy,
+		SortDesc:     sortDesc,
+		Logs:         logs,
+		GitHubToken:  githubToken,
+		Filters:      filters,
+		ReloadSource: reloadSource,
+		LoadOnStart:  loadOnStart,
 		SaveFilters: func(f prdata.FilterState) {
 			cfg.Filters = f
 			writeConfig(cfgPath, cfg)
@@ -123,13 +137,26 @@ func main() {
 
 	p := tea.NewProgram(model, tea.WithFPS(30))
 
-	// Start file watcher (watches both data file and AI evaluations)
-	go tui.WatchDataFiles(*dataPath, resolvedEvalPath, p)
+	// Start file watcher only in local mode
+	if *dataPath != "" {
+		resolvedEvalPath := *evalPath
+		if resolvedEvalPath == "" {
+			resolvedEvalPath = filepath.Join(filepath.Dir(*dataPath), "ai-evaluations.json")
+		}
+		go tui.WatchDataFiles(*dataPath, resolvedEvalPath, p)
+	}
 
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 func mergePRsWithLocalState(prs []prdata.PRInfo, state *tui.LocalState, evals map[string]prdata.AIEvaluation) []tui.PRInfoView {

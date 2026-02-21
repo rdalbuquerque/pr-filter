@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/progress"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -28,16 +29,24 @@ type PRInfoView struct {
 	AIReasoning   string
 }
 
+// ReloadSource holds the Azure Blob Storage coordinates for remote reload.
+type ReloadSource struct {
+	Account   string
+	Container string
+}
+
 type Options struct {
-	PageSize    int
-	SortBy      string
-	SortDesc    bool
-	Logs        []string
-	GitHubToken string
-	Filters     prdata.FilterState
-	SaveFilters func(prdata.FilterState)
-	SavePR      func(PRInfoView)
-	DebugLog    func(string)
+	PageSize     int
+	SortBy       string
+	SortDesc     bool
+	Logs         []string
+	GitHubToken  string
+	Filters      prdata.FilterState
+	SaveFilters  func(prdata.FilterState)
+	SavePR       func(PRInfoView)
+	DebugLog     func(string)
+	ReloadSource *ReloadSource // if set, enables R to reload from Azure
+	LoadOnStart  bool          // if true, trigger reload immediately on startup
 }
 
 type columnWidths struct {
@@ -86,10 +95,19 @@ type Model struct {
 	diffViewportHeight int
 	debugLog           func(string)
 
-	filterMode      bool
-	inputs          []textinput.Model
-	inputFocus      int
-	userInteracted  map[string]bool // tracks PRs the user explicitly toggled
+	filterMode     bool
+	inputs         []textinput.Model
+	inputFocus     int
+	userInteracted map[string]bool // tracks PRs the user explicitly toggled
+
+	// Reload from Azure
+	reloadSource   *ReloadSource
+	loadOnStart    bool
+	reloading      bool
+	reloadProgress float64 // 0.0 to 1.0
+	reloadLabel    string  // e.g. "prs.json (4.2/15.6 MB)"
+	reloadCh       <-chan reloadProgressMsg
+	progressBar    progress.Model
 }
 
 type prItem struct {
@@ -206,6 +224,9 @@ func NewModel(prs []PRInfoView, opts Options) Model {
 		diffLayout:     "side",
 		debugLog:       opts.DebugLog,
 		userInteracted: interacted,
+		reloadSource:   opts.ReloadSource,
+		loadOnStart:    opts.LoadOnStart,
+		progressBar:    progress.New(progress.WithDefaultBlend(), progress.WithWidth(40)),
 	}
 	m.viewport.FillHeight = true
 	m.viewport.SoftWrap = false
@@ -231,6 +252,13 @@ func NewModel(prs []PRInfoView, opts Options) Model {
 		m.syncInputs()
 		m.rebuild()
 	}
+
+	// If loading on start, pre-set the reload state so Init() can return the command
+	if m.loadOnStart && m.reloadSource != nil {
+		m.reloading = true
+		m.reloadLabel = "Connecting..."
+	}
+
 	return m
 }
 
@@ -252,6 +280,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		if m.reloading {
+			// Only allow quit during reload
+			if msg.String() == "q" || msg.String() == "ctrl+c" {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -270,6 +305,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncInputs()
 			m.rebuild()
 			m.persistFilters()
+		case "R":
+			if m.reloadSource != nil {
+				return m, m.startReload()
+			}
 		case "c":
 			m.filters = prdata.FilterState{}
 			m.syncInputs()
@@ -293,12 +332,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tea.WindowSizeMsg:
 		m.resize(msg.Width, msg.Height)
+		// Trigger initial load after we have window dimensions
+		if m.loadOnStart && m.reloadSource != nil {
+			m.loadOnStart = false
+			return m, m.startReload()
+		}
 	case diffMsg:
 		m.handleDiffMsg(msg)
 	case issueMsg:
 		m.handleIssueMsg(msg)
 	case dataFileChangedMsg:
 		m.handleDataFileChanged(msg)
+	case reloadProgressMsg:
+		m.reloadProgress = msg.percent
+		m.reloadLabel = msg.label
+		// Re-subscribe to get the next progress message
+		return m, waitForProgress(m.reloadCh)
+	case reloadDoneMsg:
+		m.reloading = false
+		if msg.err != nil {
+			m.logs = append(m.logs, fmt.Sprintf("Reload error: %v", msg.err))
+		} else {
+			m.handleDataFileChanged(dataFileChangedMsg{
+				PRs:         msg.prs,
+				Evaluations: msg.evals,
+			})
+			m.logs = append(m.logs, fmt.Sprintf("Reloaded %d PRs from Azure", len(msg.prs)))
+		}
+		return m, nil
 	}
 
 	m.list, cmd = m.list.Update(msg)
@@ -378,7 +439,24 @@ func (m Model) View() tea.View {
 	columns := m.columnHeader()
 	selected := m.selectedInfo()
 	status := m.statusLine()
-	keys := "Keys: q quit | f filters | c clear | / search | v mode | x checked | m saved | n/p page | g/G first/last | s sort | o order | enter details | l logs"
+
+	reloadHint := ""
+	if m.reloadSource != nil {
+		reloadHint = " | R reload"
+	}
+	keys := "Keys: q quit | f filters | c clear | / search | v mode | x checked | m saved | n/p page | g/G first/last | s sort | o order | enter details | l logs" + reloadHint
+
+	if m.reloading {
+		progressView := m.viewReloading()
+		view := strings.Join([]string{
+			header,
+			"",
+			progressView,
+			"",
+			keys,
+		}, "\n")
+		return tea.NewView(m.padView(view))
+	}
 
 	view := strings.Join([]string{
 		header,
@@ -455,6 +533,14 @@ func (m *Model) refreshItems() {
 func (m *Model) resize(width, height int) {
 	m.width = width
 	m.height = height
+	barWidth := width - 10
+	if barWidth < 20 {
+		barWidth = 20
+	}
+	if barWidth > 80 {
+		barWidth = 80
+	}
+	m.progressBar.SetWidth(barWidth)
 	m.debugf("resize width=%d height=%d", width, height)
 	m.updateLayout()
 }
@@ -476,7 +562,9 @@ func (m *Model) updateLayout() {
 	}
 	m.list.SetHeight(listHeight)
 
-	detailChrome := 7
+	// header + prLine + metaLine + issueLine + tabs + status + help = 7 text lines
+	// + 2 for the bordered box around diff panes (top/bottom border)
+	detailChrome := 9
 	diffHeight := m.height - detailChrome
 	if diffHeight < 3 {
 		diffHeight = 3

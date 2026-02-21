@@ -66,6 +66,12 @@ func LoadAIEvaluationsFile(path string) (*AIEvaluationsFile, error) {
 	return &ef, nil
 }
 
+// MarshalAIEvaluationsFile returns the JSON representation of the evaluations file.
+func MarshalAIEvaluationsFile(ef *AIEvaluationsFile) ([]byte, error) {
+	ef.UpdatedAt = time.Now()
+	return json.MarshalIndent(ef, "", "  ")
+}
+
 // SaveAIEvaluationsFile atomically writes ai-evaluations.json.
 func SaveAIEvaluationsFile(path string, ef *AIEvaluationsFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

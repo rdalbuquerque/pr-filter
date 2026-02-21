@@ -22,6 +22,11 @@ func LoadDataFile(path string) (*DataFile, error) {
 	return &df, nil
 }
 
+// MarshalDataFile returns the JSON representation of the data file.
+func MarshalDataFile(df *DataFile) ([]byte, error) {
+	return json.MarshalIndent(df, "", "  ")
+}
+
 // SaveDataFile atomically writes the data file (write to .tmp, then rename).
 func SaveDataFile(path string, df *DataFile) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

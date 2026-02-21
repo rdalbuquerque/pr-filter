@@ -13,6 +13,7 @@ import (
 	"github.com/revelo/pr-filter/internal/ai"
 	ghpkg "github.com/revelo/pr-filter/internal/github"
 	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/revelo/pr-filter/internal/storage"
 )
 
 type evalConfig struct {
@@ -24,6 +25,10 @@ type evalConfig struct {
 	BatchSize    int
 	DataPath     string
 	EvalPath     string
+	// Azure Blob Storage
+	AzureStorageAccount string
+	AzureStorageKey     string
+	AzureContainer      string
 }
 
 func main() {
@@ -61,8 +66,13 @@ func main() {
 		log.Fatalf("create GitHub client: %v", err)
 	}
 
+	blob := storage.NewAzureBlobClient(cfg.AzureStorageAccount, cfg.AzureStorageKey, cfg.AzureContainer)
+	if blob.Enabled() {
+		log.Printf("  azure storage: %s/%s", cfg.AzureStorageAccount, cfg.AzureContainer)
+	}
+
 	// Run immediately, then on interval
-	runEvalCycle(ctx, cfg, evaluator, ghClient)
+	runEvalCycle(ctx, cfg, evaluator, ghClient, blob)
 
 	ticker := time.NewTicker(cfg.Interval)
 	defer ticker.Stop()
@@ -73,12 +83,12 @@ func main() {
 			log.Printf("shutting down")
 			return
 		case <-ticker.C:
-			runEvalCycle(ctx, cfg, evaluator, ghClient)
+			runEvalCycle(ctx, cfg, evaluator, ghClient, blob)
 		}
 	}
 }
 
-func runEvalCycle(ctx context.Context, cfg evalConfig, evaluator *ai.Evaluator, ghClient *gh.Client) {
+func runEvalCycle(ctx context.Context, cfg evalConfig, evaluator *ai.Evaluator, ghClient *gh.Client, blob *storage.AzureBlobClient) {
 	// Load current PR data
 	df, err := prdata.LoadDataFile(cfg.DataPath)
 	if err != nil {
@@ -200,6 +210,15 @@ func runEvalCycle(ctx context.Context, cfg evalConfig, evaluator *ai.Evaluator, 
 	// Save evaluations
 	if err := prdata.SaveAIEvaluationsFile(cfg.EvalPath, evFile); err != nil {
 		log.Printf("[eval] save error: %v", err)
+	} else if blob.Enabled() {
+		data, err := prdata.MarshalAIEvaluationsFile(evFile)
+		if err != nil {
+			log.Printf("[azure] marshal error: %v", err)
+		} else if err := blob.Upload(ctx, "ai-evaluations.json", data); err != nil {
+			log.Printf("[azure] upload error: %v", err)
+		} else {
+			log.Printf("[azure] uploaded ai-evaluations.json (%d bytes)", len(data))
+		}
 	}
 
 	log.Printf("[eval] cycle done: %d AI-evaluated (%d recommended), %d heuristic-skipped, %d budget-skipped | budget: $%.4f / $%.2f",
@@ -249,14 +268,17 @@ func fetchIssueBody(ctx context.Context, client *gh.Client, issueURL string) str
 
 func loadConfig() evalConfig {
 	cfg := evalConfig{
-		AnthropicKey: os.Getenv("ANTHROPIC_API_KEY"),
-		GitHubToken:  os.Getenv("GITHUB_TOKEN"),
-		Model:        envOrDefault("AI_MODEL", "claude-haiku-4-5-20251001"),
-		CostLimit:    envFloat("AI_COST_LIMIT", 5.00),
-		Interval:     envDuration("AI_EVAL_INTERVAL", 30*time.Second),
-		BatchSize:    envInt("AI_EVAL_BATCH", 5),
-		DataPath:     envOrDefault("DATA_PATH", "data/prs.json"),
-		EvalPath:     envOrDefault("EVAL_PATH", "data/ai-evaluations.json"),
+		AnthropicKey:        os.Getenv("ANTHROPIC_API_KEY"),
+		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+		Model:               envOrDefault("AI_MODEL", "claude-haiku-4-5-20251001"),
+		CostLimit:           envFloat("AI_COST_LIMIT", 5.00),
+		Interval:            envDuration("AI_EVAL_INTERVAL", 30*time.Second),
+		BatchSize:            envInt("AI_EVAL_BATCH", 5),
+		DataPath:            envOrDefault("DATA_PATH", "data/prs.json"),
+		EvalPath:            envOrDefault("EVAL_PATH", "data/ai-evaluations.json"),
+		AzureStorageAccount: os.Getenv("AZURE_STORAGE_ACCOUNT"),
+		AzureStorageKey:     os.Getenv("AZURE_STORAGE_KEY"),
+		AzureContainer:      envOrDefault("AZURE_CONTAINER", "prdata"),
 	}
 	return cfg
 }

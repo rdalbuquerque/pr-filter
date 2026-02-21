@@ -12,12 +12,14 @@ import (
 	ghpkg "github.com/revelo/pr-filter/internal/github"
 	"github.com/revelo/pr-filter/internal/prdata"
 	"github.com/revelo/pr-filter/internal/sheets"
+	"github.com/revelo/pr-filter/internal/storage"
 	"golang.org/x/oauth2"
 )
 
 type service struct {
 	cfg       serviceConfig
 	state     *prdata.DataFile
+	blob      *storage.AzureBlobClient
 	mu        sync.Mutex
 	rateReset time.Time // when GitHub rate limit resets
 }
@@ -357,6 +359,20 @@ func (s *service) save() {
 	s.state.UpdatedAt = time.Now()
 	if err := prdata.SaveDataFile(s.cfg.OutputPath, s.state); err != nil {
 		log.Printf("[save] error: %v", err)
+		return
+	}
+	// Upload to Azure Blob Storage
+	if s.blob.Enabled() {
+		data, err := prdata.MarshalDataFile(s.state)
+		if err != nil {
+			log.Printf("[azure] marshal error: %v", err)
+			return
+		}
+		if err := s.blob.Upload(context.Background(), "prs.json", data); err != nil {
+			log.Printf("[azure] upload error: %v", err)
+		} else {
+			log.Printf("[azure] uploaded prs.json (%d bytes)", len(data))
+		}
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 
 	ghpkg "github.com/revelo/pr-filter/internal/github"
 	"github.com/revelo/pr-filter/internal/prdata"
+	"github.com/revelo/pr-filter/internal/storage"
 )
 
 type serviceConfig struct {
@@ -25,6 +26,10 @@ type serviceConfig struct {
 	HydrationInterval time.Duration
 	Workers           int
 	HydrationBatch    int
+	// Azure Blob Storage
+	AzureStorageAccount string
+	AzureStorageKey     string
+	AzureContainer      string
 }
 
 func main() {
@@ -59,9 +64,15 @@ func main() {
 		state = &prdata.DataFile{Version: 1}
 	}
 
+	blob := storage.NewAzureBlobClient(cfg.AzureStorageAccount, cfg.AzureStorageKey, cfg.AzureContainer)
+	if blob.Enabled() {
+		log.Printf("  azure storage: %s/%s", cfg.AzureStorageAccount, cfg.AzureContainer)
+	}
+
 	svc := &service{
 		cfg:   cfg,
 		state: state,
+		blob:  blob,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -110,16 +121,19 @@ func runSetup() {
 
 func loadEnvConfig() serviceConfig {
 	cfg := serviceConfig{
-		OutputPath:        envOrDefault("OUTPUT_PATH", "data/prs.json"),
-		SheetID:           os.Getenv("SHEET_ID"),
-		SheetGID:          envInt64("SHEET_GID", 0),
-		GoogleSecret:      envOrDefault("GOOGLE_SECRET", "config/client_secret.json"),
-		GoogleToken:       envOrDefault("GOOGLE_TOKEN", "config/google-token.json"),
-		GitHubToken:       os.Getenv("GITHUB_TOKEN"),
-		SheetPollInterval: envDuration("SHEET_POLL_INTERVAL", 2*time.Minute),
-		HydrationInterval: envDuration("HYDRATION_INTERVAL", 5*time.Second),
-		Workers:           envInt("WORKERS", 5),
-		HydrationBatch:    envInt("HYDRATION_BATCH_SIZE", 10),
+		OutputPath:          envOrDefault("OUTPUT_PATH", "data/prs.json"),
+		SheetID:             os.Getenv("SHEET_ID"),
+		SheetGID:            envInt64("SHEET_GID", 0),
+		GoogleSecret:        envOrDefault("GOOGLE_SECRET", "config/client_secret.json"),
+		GoogleToken:         envOrDefault("GOOGLE_TOKEN", "config/google-token.json"),
+		GitHubToken:         os.Getenv("GITHUB_TOKEN"),
+		SheetPollInterval:   envDuration("SHEET_POLL_INTERVAL", 2*time.Minute),
+		HydrationInterval:   envDuration("HYDRATION_INTERVAL", 5*time.Second),
+		Workers:             envInt("WORKERS", 5),
+		HydrationBatch:      envInt("HYDRATION_BATCH_SIZE", 10),
+		AzureStorageAccount: os.Getenv("AZURE_STORAGE_ACCOUNT"),
+		AzureStorageKey:     os.Getenv("AZURE_STORAGE_KEY"),
+		AzureContainer:      envOrDefault("AZURE_CONTAINER", "prdata"),
 	}
 
 	if cfg.SheetID == "" {
