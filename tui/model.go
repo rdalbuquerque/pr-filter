@@ -47,6 +47,7 @@ type Options struct {
 	DebugLog     func(string)
 	ReloadSource *ReloadSource // if set, enables R to reload from Azure
 	LoadOnStart  bool          // if true, trigger reload immediately on startup
+	LocalState   *LocalState   // persisted local state for checked/saved flags
 }
 
 type columnWidths struct {
@@ -99,6 +100,7 @@ type Model struct {
 	inputs         []textinput.Model
 	inputFocus     int
 	userInteracted map[string]bool // tracks PRs the user explicitly toggled
+	localState     *LocalState     // persisted local state for reload merges
 
 	// Reload from Azure
 	reloadSource   *ReloadSource
@@ -227,6 +229,7 @@ func NewModel(prs []PRInfoView, opts Options) Model {
 		reloadSource:   opts.ReloadSource,
 		loadOnStart:    opts.LoadOnStart,
 		progressBar:    progress.New(progress.WithDefaultBlend(), progress.WithWidth(40)),
+		localState:     opts.LocalState,
 	}
 	m.viewport.FillHeight = true
 	m.viewport.SoftWrap = false
@@ -382,19 +385,27 @@ func (m *Model) handleDataFileChanged(msg dataFileChangedMsg) {
 		}
 	}
 
-	// Build a map of current local state
-	localState := make(map[string]struct{ Checked, Saved bool })
+	// Build a map of current in-memory state
+	inMemory := make(map[string]struct{ Checked, Saved bool })
 	for _, pr := range m.allRows {
-		localState[pr.URL] = struct{ Checked, Saved bool }{pr.Checked, pr.Saved}
+		inMemory[pr.URL] = struct{ Checked, Saved bool }{pr.Checked, pr.Saved}
 	}
 
 	// Merge new data with local state and AI evaluations
 	newRows := make([]PRInfoView, 0, len(msg.PRs))
 	for _, pr := range msg.PRs {
 		view := PRInfoView{PRInfo: pr}
-		if state, ok := localState[pr.URL]; ok {
+		if state, ok := inMemory[pr.URL]; ok {
+			// Use in-memory state (covers runtime toggles)
 			view.Checked = state.Checked
 			view.Saved = state.Saved
+		} else if m.localState != nil {
+			// Fall back to persisted local state (covers fresh startup in Azure mode)
+			if ls, ok := m.localState.PRs[pr.URL]; ok {
+				view.Checked = ls.Checked
+				view.Saved = ls.Saved
+				m.userInteracted[pr.URL] = true
+			}
 		}
 
 		// Merge AI evaluation data

@@ -119,6 +119,7 @@ func main() {
 		Filters:      filters,
 		ReloadSource: reloadSource,
 		LoadOnStart:  loadOnStart,
+		LocalState:   localState,
 		SaveFilters: func(f prdata.FilterState) {
 			cfg.Filters = f
 			writeConfig(cfgPath, cfg)
